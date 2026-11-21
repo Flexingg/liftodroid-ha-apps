@@ -38,11 +38,11 @@ then App store → ⋮ → **Check for updates**; it appears under *Local apps*.
 Then:
 
 1. It needs the Mosquitto broker app (already running if you use VisionState).
-2. Copy `barbell.example.yaml` to the app's config folder as `barbell.yaml`. That's the folder under
-   `/addon_configs/` whose name ends in `liftodroid_barbell` (Studio Code Server shows it).
-3. In the app's **Configuration**: set `camera_url` to the camera's RTSP(S) stream (the same URL your Generic camera
+2. In the app's **Configuration**: set `camera_url` to the camera's RTSP(S) stream (the same URL your Generic camera
    uses), or `camera_entity` to a camera entity. Optionally `person_entity: binary_sensor.in_squat_rack_person`.
-4. Start it, then calibrate (below). Until calibrated it logs what's missing and waits.
+3. Start it. On first start it automatically creates a starter `barbell.yaml` in the app's config folder (the folder
+   under `/addon_configs/` whose name ends in `liftodroid_barbell`, visible in Studio Code Server).
+4. Calibrate (below) and edit that `barbell.yaml` with your lens, sleeve, and plate measurements.
 
 ## Calibrate
 

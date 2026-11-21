@@ -18,10 +18,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 import urllib.request
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Callable
 
 import cv2
@@ -303,6 +305,19 @@ class Worker:
         LOG.info("Read %s %s (%.0f%%) %s", r.detected_weight, r.unit, r.confidence * 100, r.status)
 
 
+def ensure_config_file(cfg_path: str | Path, example_path: Path | None = None) -> bool:
+    """Create [cfg_path] from the bundled barbell.example.yaml if it doesn't exist yet. Returns True if created."""
+    dest = Path(cfg_path)
+    if dest.exists():
+        return False
+    src = example_path or (Path(__file__).resolve().parents[1] / "barbell.example.yaml")
+    if not src.exists():
+        raise FileNotFoundError(f"Default config template not found at {src}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dest)
+    return True
+
+
 def main() -> None:
     import paho.mqtt.client as mqtt
 
@@ -310,10 +325,8 @@ def main() -> None:
     logging.basicConfig(level=getattr(logging, str(opts.get("log_level", "info")).upper(), logging.INFO),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     cfg_path = opts.get("config_file", "/config/barbell.yaml")
-    if not os.path.exists(cfg_path):
-        LOG.error("No %s yet. Copy barbell.example.yaml there and calibrate (see the Documentation tab).", cfg_path)
-        while True:
-            time.sleep(3600)
+    if ensure_config_file(cfg_path):
+        LOG.info("Created default %s from barbell.example.yaml; edit it to calibrate your camera, sleeve, and plates (see the Documentation tab).", cfg_path)
     cfg = load(cfg_path)
     if opts.get("camera_url"):
         cfg = replace(cfg, camera_url=opts["camera_url"])
@@ -330,6 +343,8 @@ def main() -> None:
     analyzer = Analyzer(cfg, reader, reference)
     core = CoreApi()
     camera_entity = opts.get("camera_entity")
+    if not cfg.camera_url and not camera_entity:
+        LOG.warning("No camera_url or camera_entity configured yet; set one in the app's Configuration tab.")
     factory = (lambda: RtspCapture(cfg.camera_url)) if cfg.camera_url else (lambda: SnapshotCapture(camera_entity, core))
 
     m = opts.get("mqtt_host") and {"host": opts["mqtt_host"], "port": opts.get("mqtt_port", 1883),

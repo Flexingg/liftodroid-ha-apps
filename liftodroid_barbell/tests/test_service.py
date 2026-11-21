@@ -155,3 +155,18 @@ def test_calibration_cli_analyze_and_evaluate(tmp_path, capsys):
     main(["analyze", "--config", str(tmp_path / "c.yaml"), "--frame", str(labelled / "185_a.png"), "--out", str(tmp_path / "ann.jpg")])
     assert '"detected_weight": 185.0' in capsys.readouterr().out
     assert (tmp_path / "ann.jpg").exists()
+
+
+def test_ensure_config_file_creates_default_once(tmp_path):
+    from barbell.config import load
+    from barbell.service import ensure_config_file
+
+    dest = tmp_path / "nested" / "barbell.yaml"
+    assert ensure_config_file(dest) is True
+    assert dest.exists()
+    cfg = load(dest)
+    assert cfg.unit == "lb" and cfg.sleeve is not None
+
+    dest.write_text("unit: kg\n")
+    assert ensure_config_file(dest) is False
+    assert dest.read_text() == "unit: kg\n"
