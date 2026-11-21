@@ -29,9 +29,19 @@ def test_full_remote_setup():
 
 
 def test_axis_and_length():
-    cfg = apply_options(BASE, {"sleeve_roi": "0.1,0.1;0.5,0.1;0.5,0.5", "sleeve_axis": "0.2,0.3 0.45,0.3", "sleeve_length_mm": 420})
+    cfg = apply_options(BASE, {
+        "sleeve_roi": "0.1,0.1;0.5,0.1;0.5,0.5",
+        "sleeve_axis": "0.2,0.3 0.45,0.3",
+        "sleeve_length_mm": 420,
+        "outer_face_mm": 45,
+        "plates": "45x4:450/76:red, 25:450/43:blue",
+        "use_color": True,
+    })
     assert cfg.sleeve.axis == ((0.2, 0.3), (0.45, 0.3))
     assert cfg.sleeve.sleeve_length_mm == 420
+    assert cfg.sleeve.outer_face_mm == 45
+    assert [(p.weight, p.color) for p in cfg.plates] == [(45, "red"), (25, "blue")]
+    assert cfg.use_color is True
 
 
 @pytest.mark.parametrize("bad", [{"sleeve_roi": "0.1,0.1 1.5,0.2 0.3,0.3"}, {"sleeve_roi": "0.1,0.1 0.2,0.2"},

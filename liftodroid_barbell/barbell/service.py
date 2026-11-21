@@ -239,8 +239,9 @@ def supervisor_mqtt() -> dict[str, Any] | None:
 # ------------------------------------------------------------------------------------------------ worker
 
 class Worker:
-    def __init__(self, cfg: Config, analyzer: Analyzer, capture_factory: Callable[[], Any], core: CoreApi,
+    def __init__(self, cfg: Config, analyzer: Analyzer | None, capture_factory: Callable[[], Any], core: CoreApi,
                  publish: Callable[[str, Any, bool], None], clock: Callable[[], float] = time.time):
+        self._lock = threading.RLock()
         self.cfg = cfg
         self.analyzer = analyzer
         self.capture_factory = capture_factory
@@ -257,6 +258,17 @@ class Worker:
         self._last_analysis = 0.0
         self._mask = None
         self._want_reference = False
+        self.on_reading_hook: Callable[[np.ndarray, float, Any], None] | None = None
+        self.on_reference_hook: Callable[[np.ndarray], None] | None = None
+
+    def reload(self, cfg: Config, reference: np.ndarray | None, reader: Any = None) -> None:
+        """Hot-reload configuration and reference image from the Web UI without restarting the app."""
+        with self._lock:
+            rdr = reader if reader is not None else (self.analyzer.reader if self.analyzer is not None else None)
+            self.cfg = cfg
+            self.analyzer = Analyzer(cfg, rdr, reference) if cfg.sleeve is not None else None
+            self.gate = MotionGate(cfg.thresholds.motion_pixel_delta, cfg.thresholds.motion_fraction, cfg.thresholds.settle_s)
+            self._mask = None
 
     # Commands arrive on the MQTT thread; the loop reads these flags.
     def on_command(self, topic: str, payload: bytes) -> None:
@@ -287,70 +299,111 @@ class Worker:
             self.publish(f"{BASE}/enabled", "ON" if self.enabled else "OFF", True)
 
     def step(self) -> None:
-        now = self.clock()
-        armed = self.enabled and self.arm.armed(now)
-        if armed != self._armed_published:
-            self._armed_published = armed
-            self.publish(f"{BASE}/armed", "ON" if armed else "OFF", True)
-        if not armed:
-            if self.capture is not None:
-                self.capture.close()
-                self.capture = None
-                self.gate.reset()
-            return
-        if self.capture is None:
-            self.capture = self.capture_factory()
-            self.capture.open()
-        got = self.capture.latest()
-        if got is None:
-            return
-        t, frame = got
-        if self._want_reference:
-            self._want_reference = False
-            self.save_reference(frame)
-            return
-        if t - self._last_analysis < 1.0 / max(self.cfg.analysis_fps, 0.1):
-            return
-        self._last_analysis = t
-        und = self.analyzer.undistort(frame)
-        gray = cv2.cvtColor(und, cv2.COLOR_BGR2GRAY)
-        if self._mask is None or self._mask.shape != gray.shape:
-            self._mask = polygon_mask(gray.shape, self.cfg.sleeve.roi)
-        ev = self.gate.feed(t, gray, self._mask)
-        moving = ev == GateEvent.MOVING
-        if moving != self._motion:
-            self._motion = moving
-            self.publish(f"{BASE}/motion", "ON" if moving else "OFF", True)
-        if ev == GateEvent.SETTLED:
-            self._pending = True
-        if self._pending and not moving:
-            if self.cfg.person_entity and self.core.state(self.cfg.person_entity) == "on":
-                return  # someone is in the rack: wait until they step out
-            self._pending = False
-            self.read(frame, t)
+        with self._lock:
+            now = self.clock()
+            armed = self.enabled and self.arm.armed(now)
+            if armed != self._armed_published:
+                self._armed_published = armed
+                self.publish(f"{BASE}/armed", "ON" if armed else "OFF", True)
+            if not armed:
+                if self.capture is not None:
+                    self.capture.close()
+                    self.capture = None
+                    self.gate.reset()
+                return
+            if self.capture is None:
+                self.capture = self.capture_factory()
+                self.capture.open()
+            got = self.capture.latest()
+            if got is None:
+                return
+            t, frame = got
+            if self._want_reference:
+                self._want_reference = False
+                self.save_reference(frame)
+                return
+            if self.analyzer is None or self.cfg.sleeve is None:
+                return
+            if t - self._last_analysis < 1.0 / max(self.cfg.analysis_fps, 0.1):
+                return
+            self._last_analysis = t
+            und = self.analyzer.undistort(frame)
+            gray = cv2.cvtColor(und, cv2.COLOR_BGR2GRAY)
+            if self._mask is None or self._mask.shape != gray.shape:
+                self._mask = polygon_mask(gray.shape, self.cfg.sleeve.roi)
+            ev = self.gate.feed(t, gray, self._mask)
+            moving = ev == GateEvent.MOVING
+            if moving != self._motion:
+                self._motion = moving
+                self.publish(f"{BASE}/motion", "ON" if moving else "OFF", True)
+            if ev == GateEvent.SETTLED:
+                self._pending = True
+            if self._pending and not moving:
+                if self.cfg.person_entity and self.core.state(self.cfg.person_entity) == "on":
+                    return  # someone is in the rack: wait until they step out
+                self._pending = False
+                self.read(frame, t)
 
     def save_reference(self, frame: np.ndarray) -> None:
-        und = self.analyzer.undistort(frame)
+        from .geometry import Undistorter
+
+        und = self.analyzer.undistort(frame) if self.analyzer is not None else Undistorter(self.cfg.lens)(frame)
         path = self.cfg.reference_image or "/config/reference.png"
         try:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(path, und)
         except OSError as e:
             LOG.warning("Couldn't save the reference to %s: %s", path, e)
-        self.analyzer.reference = und
+        if self.analyzer is not None:
+            self.analyzer.reference = und
+        if self.on_reference_hook is not None:
+            self.on_reference_hook(und)
         LOG.info("Saved the empty-bar reference (%s)", path)
 
-    def read(self, frame: np.ndarray, t: float) -> None:
-        ctx = self.arm.context
-        cfg = with_context(self.cfg, ctx.get("unit"), ctx.get("bar"), ctx.get("plates"))
-        analyzer = self.analyzer if cfg is self.cfg else self.analyzer.with_config(cfg)
-        a = analyzer.analyze(frame, expected_total=ctx.get("expected"))
-        r = replace(a.reading, frame_timestamp=t, last_motion_ts=self.gate.last_motion_ts, context=ctx or None)
-        ok, jpg = cv2.imencode(".jpg", a.annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    def publish_analysis(self, analysis: Any, t: float, ctx: dict | None = None) -> None:
+        r = replace(analysis.reading, frame_timestamp=t, last_motion_ts=self.gate.last_motion_ts, context=ctx or None)
+        ok, jpg = cv2.imencode(".jpg", analysis.annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if ok:
             self.publish(f"{BASE}/frame", jpg.tobytes(), True)
         self.publish(f"{BASE}/state", json.dumps(r.to_payload()), True)
         LOG.info("Read %s %s (%.0f%%) %s", r.detected_weight, r.unit, r.confidence * 100, r.status)
+
+    def read(self, frame: np.ndarray, t: float) -> None:
+        if self.analyzer is None:
+            return
+        ctx = self.arm.context
+        cfg = with_context(self.cfg, ctx.get("unit"), ctx.get("bar"), ctx.get("plates"))
+        analyzer = self.analyzer if cfg is self.cfg else self.analyzer.with_config(cfg)
+        a = analyzer.analyze(frame, expected_total=ctx.get("expected"))
+        self.publish_analysis(a, t, ctx)
+        if self.on_reading_hook is not None:
+            self.on_reading_hook(frame, t, a)
+
+
+def grab_one_frame(cfg: Config, camera_entity: str | None, core: CoreApi, worker: Worker | None = None) -> np.ndarray | None:
+    """Grab a single live frame for the Web UI without leaving RTSP open when idle."""
+    if worker is not None and worker.capture is not None:
+        got = worker.capture.latest()
+        if got is not None:
+            return got[1].copy()
+    if cfg.camera_url:
+        os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+        cap = cv2.VideoCapture(cfg.camera_url, cv2.CAP_FFMPEG)
+        frame = None
+        try:
+            if cap.isOpened():
+                for _ in range(8):
+                    ok, f = cap.read()
+                    if ok and f is not None:
+                        frame = f
+        finally:
+            cap.release()
+        return frame
+    if camera_entity:
+        data = core.get_bytes(f"/camera_proxy/{camera_entity}")
+        if data:
+            return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    return None
 
 
 def ensure_config_file(cfg_path: str | Path, example_path: Path | None = None) -> bool:
@@ -369,17 +422,16 @@ def ensure_config_file(cfg_path: str | Path, example_path: Path | None = None) -
 def main() -> None:
     import paho.mqtt.client as mqtt
 
+    from .config import load_with_options
+    from .web import WebContext, start_server
+
     opts = json.load(open("/data/options.json")) if os.path.exists("/data/options.json") else {}
     logging.basicConfig(level=getattr(logging, str(opts.get("log_level", "info")).upper(), logging.INFO),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     cfg_path = opts.get("config_file", "/config/barbell.yaml")
     if ensure_config_file(cfg_path):
-        LOG.info("Created default %s from barbell.example.yaml; edit it to calibrate your camera, sleeve, and plates (see the Documentation tab).", cfg_path)
-    cfg = apply_options(load(cfg_path), opts)
-    if cfg.sleeve is None:
-        LOG.error("No sleeve set: fill in sleeve_roi in the app's Configuration tab (or barbell.yaml), then restart.")
-        while True:
-            time.sleep(3600)
+        LOG.info("Created default %s from barbell.example.yaml; open the Web UI to draw the sleeve and calibrate.", cfg_path)
+    cfg = load_with_options(cfg_path, opts)
     reference = cv2.imread(cfg.reference_image) if cfg.reference_image and os.path.exists(cfg.reference_image) else None
     reader = None
     try:
@@ -387,46 +439,89 @@ def main() -> None:
 
         reader = RapidOcrReader()
     except Exception as e:  # noqa: BLE001
-        LOG.warning("OCR unavailable (%s): reading plate sizes only", e)
-    analyzer = Analyzer(cfg, reader, reference)
+        LOG.warning("OCR unavailable (%s): reading plate sizes/colors only", e)
+    analyzer = Analyzer(cfg, reader, reference) if cfg.sleeve is not None else None
     core = CoreApi()
     camera_entity = opts.get("camera_entity")
     if not cfg.camera_url and not camera_entity:
         LOG.warning("No camera_url or camera_entity configured yet; set one in the app's Configuration tab.")
     factory = (lambda: RtspCapture(cfg.camera_url)) if cfg.camera_url else (lambda: SnapshotCapture(camera_entity, core, min_interval_s=1.0 / max(cfg.analysis_fps, 0.1)))
 
+    mqtt_state: dict[str, Any] = {"client": None, "connected": False}
+
+    def publish(topic: str, payload: Any, retain: bool) -> None:
+        c = mqtt_state["client"]
+        if c is not None:
+            c.publish(topic, payload, qos=1, retain=retain)
+
+    worker = Worker(cfg, analyzer, factory, core, publish)
+    prefix = opts.get("discovery_prefix", "homeassistant")
+
+    def on_ui_config_saved(new_cfg: Config, new_ref: np.ndarray | None) -> None:
+        worker.reload(new_cfg, new_ref, reader)
+        c = mqtt_state["client"]
+        if c is not None and mqtt_state["connected"]:
+            for topic, payload in discovery(prefix, new_cfg.unit):
+                c.publish(topic, json.dumps(payload), qos=1, retain=True)
+
+    web_ctx = WebContext(
+        cfg=cfg,
+        cfg_path=cfg_path,
+        opts=opts,
+        grab_frame=lambda: grab_one_frame(worker.cfg, camera_entity, core, worker),
+        reader=reader,
+        reference=reference,
+        on_config_saved=on_ui_config_saved,
+        on_publish_reading=lambda a: worker.publish_analysis(a, time.time()),
+        status_provider=lambda: {
+            "armed": worker.arm.armed(time.time()),
+            "enabled": worker.enabled,
+            "mqtt_connected": mqtt_state["connected"],
+        },
+    )
+    worker.on_reading_hook = lambda frame, t, a: (
+        web_ctx.set_live_frame(frame, t),
+        setattr(web_ctx, "last_analysis", a),
+        setattr(web_ctx, "last_analysis_cfg", worker.cfg),
+    )
+    worker.on_reference_hook = lambda und: web_ctx.set_reference(und)
+
+    web_port = int(os.environ.get("BARBELL_WEB_PORT", "8099"))
+    start_server(web_ctx, host="0.0.0.0", port=web_port)
+
     while True:
         m = opts.get("mqtt_host") and {"host": opts["mqtt_host"], "port": opts.get("mqtt_port", 1883),
                                        "username": opts.get("mqtt_username"), "password": opts.get("mqtt_password")} or supervisor_mqtt()
         if m:
             break
-        # Don't exit: the watchdog would restart us in a loop and the app would show as failed.
+        # Don't exit: the watchdog would restart us in a loop and the Web UI stays up for setup.
         LOG.error("No MQTT broker found (is the Mosquitto broker app running?). Trying again in 30 s.")
         time.sleep(30)
+
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=NODE)
     if m.get("username"):
         client.username_pw_set(m["username"], m.get("password"))
     client.will_set(f"{BASE}/status", "offline", retain=True)
-
-    def publish(topic: str, payload: Any, retain: bool) -> None:
-        client.publish(topic, payload, qos=1, retain=retain)
-
-    worker = Worker(cfg, analyzer, factory, core, publish)
-    prefix = opts.get("discovery_prefix", "homeassistant")
+    mqtt_state["client"] = client
 
     def on_connect(c, _u, _f, rc, _p=None):
+        mqtt_state["connected"] = True
         LOG.info("MQTT connected (%s)", rc)
-        for topic, payload in discovery(prefix, cfg.unit):
+        for topic, payload in discovery(prefix, worker.cfg.unit):
             c.publish(topic, json.dumps(payload), qos=1, retain=True)
         c.publish(f"{BASE}/status", "online", qos=1, retain=True)
         c.publish(f"{BASE}/enabled", "ON" if worker.enabled else "OFF", qos=1, retain=True)
         c.subscribe(f"{BASE}/cmd/#", qos=1)
 
+    def on_disconnect(_c, _u, _f, _rc, _p=None):
+        mqtt_state["connected"] = False
+
     client.on_connect = on_connect
+    client.on_disconnect = on_disconnect
     client.on_message = lambda _c, _u, msg: worker.on_command(msg.topic, msg.payload)
     client.connect(m["host"], int(m.get("port", 1883)))
     client.loop_start()
-    LOG.info("Barbell camera ready (v%s); idle until a workout arms it", __version__)
+    LOG.info("Barbell camera ready (v%s); Web UI on :%d; idle until a workout arms it", __version__, web_port)
     while True:
         try:
             worker.step()

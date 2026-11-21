@@ -1,0 +1,1288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LiftoDroid Barbell Camera</title>
+<style>
+  :root {
+    --bg: #111418;
+    --card: #1a1f26;
+    --card-2: #222933;
+    --border: #2e3744;
+    --text: #e8eef5;
+    --muted: #93a1b3;
+    --accent: #38bdf8;
+    --accent-2: #0284c7;
+    --ok: #22c55e;
+    --warn: #f59e0b;
+    --err: #ef4444;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 18px;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 500;
+    background: var(--card-2); border: 1px solid var(--border); color: var(--muted);
+  }
+  .pill.ok { color: #86efac; border-color: #166534; background: #052e16; }
+  .pill.warn { color: #fde68a; border-color: #92400e; background: #451a03; }
+  .pill.err { color: #fca5a5; border-color: #991b1b; background: #450a0a; }
+  .header-right { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+  button, select, input[type="number"], input[type="text"] {
+    font: inherit;
+    color: var(--text);
+    background: var(--card-2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 6px 10px;
+  }
+  button {
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+  }
+  button:hover:not(:disabled) { background: #2b3441; border-color: #455264; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.primary { background: var(--accent-2); border-color: var(--accent); color: #fff; }
+  button.primary:hover:not(:disabled) { background: #0369a1; }
+  button.save-dirty { background: #15803d; border-color: var(--ok); color: #fff; }
+  button.save-dirty:hover:not(:disabled) { background: #166534; }
+  button.danger { color: #fca5a5; border-color: #7f1d1d; }
+  button.danger:hover:not(:disabled) { background: #450a0a; }
+  button.active { background: #1e3a5f; border-color: var(--accent); color: #bae6fd; }
+  button.sm { padding: 4px 8px; font-size: 12px; }
+
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(340px, 1fr);
+    gap: 16px;
+    padding: 16px;
+    max-width: 1560px;
+    margin: 0 auto;
+  }
+  @media (max-width: 980px) {
+    main { grid-template-columns: 1fr; }
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+  .card h2 {
+    margin: 0 0 10px;
+    font-size: 15px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .spacer { flex: 1; }
+  .canvas-wrap {
+    position: relative;
+    background: #0a0c0f;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    min-height: 260px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas, .preview-img {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 62vh;
+    object-fit: contain;
+    touch-action: none;
+  }
+  .empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--muted);
+  }
+  .banner {
+    padding: 8px 12px;
+    border-radius: 7px;
+    font-size: 13px;
+    margin-bottom: 10px;
+    border: 1px solid var(--border);
+    background: var(--card-2);
+  }
+  .banner.info { border-color: #0284c7; background: #0c2338; color: #bae6fd; }
+  .banner.warn { border-color: #92400e; background: #3b1c06; color: #fde68a; }
+  .banner.err { border-color: #991b1b; background: #3b0d0d; color: #fecaca; }
+  .banner.ok { border-color: #166534; background: #072c18; color: #bbf7d0; }
+
+  .tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+
+  .result-hero {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: 8px;
+    background: var(--card-2);
+    border: 1px solid var(--border);
+    margin: 10px 0;
+  }
+  .result-weight { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
+  .result-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .kv-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 10px 0;
+  }
+  .kv {
+    background: var(--card-2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 8px 10px;
+  }
+  .kv label { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+  .kv .val { font-size: 15px; font-weight: 600; margin-top: 2px; }
+
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 110px; }
+  .field label { font-size: 12px; color: var(--muted); }
+  .toggle-row {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+    padding: 9px 10px; border-radius: 8px; background: var(--card-2);
+    border: 1px solid var(--border); margin-bottom: 8px;
+  }
+  .toggle-row strong { display: block; font-size: 13px; }
+  .toggle-row small { color: var(--muted); font-size: 12px; }
+  .toggle-row input[type="checkbox"] { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--accent); cursor: pointer; }
+
+  .slider-row { margin-bottom: 10px; }
+  .slider-head { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
+  .slider-head span:last-child { font-weight: 600; color: var(--accent); }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 5px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; font-weight: 600; }
+  td input[type="number"] { width: 64px; padding: 4px 6px; }
+  td select { padding: 4px 6px; }
+  .swatch {
+    display: inline-block; width: 16px; height: 16px; border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.35); vertical-align: middle;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 8px; border-radius: 6px; font-size: 12px;
+    background: var(--card-2); border: 1px solid var(--border); margin: 2px 4px 2px 0;
+  }
+  .muted { color: var(--muted); font-size: 12px; }
+  .toast {
+    position: fixed; bottom: 16px; right: 16px; z-index: 50;
+    padding: 10px 14px; border-radius: 8px; background: #1e293b;
+    border: 1px solid var(--accent); color: #fff; font-size: 13px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.45); display: none;
+  }
+  .cal-box {
+    background: #14202e; border: 1px solid #234263; border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 12px;
+  }
+  .cal-box h3 { margin: 0 0 6px; font-size: 13px; color: #bae6fd; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>LiftoDroid Barbell Camera</h1>
+    <span class="pill" id="verPill">v…</span>
+    <span class="pill" id="camPill">Camera…</span>
+    <span class="pill" id="refPill">Empty bar…</span>
+    <span class="pill" id="ocrPill">OCR…</span>
+  </div>
+  <div class="header-right">
+    <button id="saveBtn" class="primary" onclick="saveConfig()">Save &amp; Apply</button>
+  </div>
+</header>
+
+<main>
+  <!-- LEFT COLUMN: CAMERA CANVAS & DIAGNOSTICS -->
+  <section>
+    <div class="card">
+      <div class="toolbar">
+        <button class="primary" onclick="grabFrame()">Grab Live Frame</button>
+        <button onclick="document.getElementById('uploadInput').click()">Upload Photo</button>
+        <input id="uploadInput" type="file" accept="image/*" style="display:none" onchange="uploadPhoto(this)">
+        <button onclick="saveReference(false)" title="Unload the bar completely, then click to capture an empty-bar reference">Save Empty Bar</button>
+        <button id="clearRefBtn" class="sm danger" style="display:none" onclick="clearReference()">Clear Ref</button>
+        <span class="spacer"></span>
+        <button id="viewEditBtn" class="sm active" onclick="setView('edit')">Setup Canvas</button>
+        <button id="viewAnnBtn" class="sm" onclick="setView('annotated')">Annotated</button>
+        <button id="viewRefBtn" class="sm" onclick="setView('reference')">Empty Ref</button>
+      </div>
+
+      <div id="modeBanner" class="banner info" style="display:none"></div>
+
+      <div class="toolbar" id="canvasTools">
+        <span class="muted">Drag yellow corners (ROI) &amp; green arrow (Collar → Tip):</span>
+        <button id="toolDragBtn" class="sm active" onclick="setTool('drag')">Drag Handles</button>
+        <button id="toolBoxBtn" class="sm" onclick="setTool('box')">Draw ROI Box</button>
+        <button id="toolAxisBtn" class="sm" onclick="setTool('axis')">Draw Collar → Tip</button>
+        <label class="muted" style="display:inline-flex;align-items:center;gap:4px;margin-left:auto">
+          <input type="checkbox" id="editSleeveB" onchange="toggleSleeveB(this.checked)"> Second sleeve
+        </label>
+      </div>
+
+      <div class="canvas-wrap" id="canvasWrap">
+        <div class="empty-state" id="emptyState">
+          <p style="margin:0 0 10px">No camera frame captured yet.</p>
+          <button class="primary" onclick="grabFrame()">Grab Live Frame</button>
+          <button onclick="document.getElementById('uploadInput').click()">Upload Test Photo</button>
+        </div>
+        <canvas id="canvas" style="display:none"></canvas>
+        <img id="previewImg" class="preview-img" style="display:none" alt="Preview">
+      </div>
+    </div>
+
+    <div class="card" id="diagCard" style="display:none">
+      <h2>
+        <span>Sleeve Strip Diagnostics</span>
+        <span class="muted" id="diagSummary"></span>
+      </h2>
+      <img id="diagImg" class="preview-img" alt="Diagnostic sleeve strip" style="border-radius:6px;border:1px solid var(--border)">
+      <p class="muted" style="margin:8px 0 0">
+        Top: straightened sleeve from Collar (0 mm) → Tip. Middle: green overlay shows what the thickness detector sees as plates (cyan line = measured stack end). Bottom (when tape colors are set): detected electrical tape bands.
+      </p>
+    </div>
+  </section>
+
+  <!-- RIGHT COLUMN: CONTROLS -->
+  <section>
+    <div class="card">
+      <div class="tabs">
+        <button class="sm active" id="tabBtnTest" onclick="switchTab('test')">Test &amp; Read</button>
+        <button class="sm" id="tabBtnDetect" onclick="switchTab('detect')">Detection &amp; Thickness</button>
+        <button class="sm" id="tabBtnPlates" onclick="switchTab('plates')">Plates &amp; Tape Colors</button>
+      </div>
+
+      <!-- TAB 1: TEST & READ -->
+      <div id="tabTest" class="tab-pane active">
+        <div class="row">
+          <div class="field">
+            <label>Planned / Expected total (optional — leave blank to test blind)</label>
+            <input type="number" step="0.5" id="expectedInput" placeholder="e.g. 225">
+          </div>
+        </div>
+        <div class="row">
+          <button class="primary" onclick="runTest(true)">Grab &amp; Test Now</button>
+          <button onclick="runTest(false)">Re-test Current Frame</button>
+          <label class="muted" style="display:inline-flex;align-items:center;gap:5px;margin-left:auto">
+            <input type="checkbox" id="publishCheck"> Push to HA
+          </label>
+        </div>
+
+        <div id="testError" class="banner err" style="display:none"></div>
+
+        <div id="resultBox" style="display:none">
+          <div class="result-hero">
+            <div>
+              <div class="result-weight" id="resWeight">—</div>
+              <div class="result-sub" id="resBreakdown"></div>
+            </div>
+            <div style="text-align:right">
+              <span class="pill" id="resStatus">—</span>
+              <div class="result-sub" id="resConf"></div>
+            </div>
+          </div>
+
+          <div class="kv-grid">
+            <div class="kv">
+              <label>Measured Stack</label>
+              <div class="val" id="resMeasured">—</div>
+            </div>
+            <div class="kv">
+              <label>Predicted Stack</label>
+              <div class="val" id="resPredicted">—</div>
+            </div>
+          </div>
+
+          <div id="resReasons" style="margin-bottom:8px"></div>
+          <div id="resColorsWrap" style="margin-bottom:8px;display:none">
+            <div class="muted" style="margin-bottom:4px">Detected rim tape bands:</div>
+            <div id="resColors"></div>
+          </div>
+          <div id="resOcrWrap" style="margin-bottom:8px;display:none">
+            <div class="muted" style="margin-bottom:4px">OCR readings:</div>
+            <div id="resOcr"></div>
+          </div>
+          <div id="resAltsWrap" style="display:none">
+            <div class="muted" style="margin-bottom:4px">Top candidate totals:</div>
+            <table>
+              <thead><tr><th>Total</th><th>Per side</th><th>Probability</th></tr></thead>
+              <tbody id="resAlts"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: DETECTION & THICKNESS -->
+      <div id="tabDetect" class="tab-pane">
+        <div class="toggle-row">
+          <div>
+            <strong>Plate thickness / shape (recommended primary)</strong>
+            <small>Measures how far plates extend along the sleeve from the collar — detects plates hidden behind the outer plate. Works best with an empty-bar reference and Collar → Tip axis drawn accurately.</small>
+          </div>
+          <input type="checkbox" id="optUseShape" onchange="onControlChange()">
+        </div>
+        <div class="toggle-row">
+          <div>
+            <strong>Colored rim electrical tape (backup or combo)</strong>
+            <small>Reads colored electrical tape wrapped around the outer circumference of each plate. Assign tape colors in the <em>Plates &amp; Tape Colors</em> tab.</small>
+          </div>
+          <input type="checkbox" id="optUseColor" onchange="onControlChange()">
+        </div>
+        <div class="toggle-row">
+          <div>
+            <strong>Face lettering OCR</strong>
+            <small>Reads white weight markings on plate faces to help settle ties.</small>
+          </div>
+          <input type="checkbox" id="optUseOcr" onchange="onControlChange()">
+        </div>
+
+        <div class="cal-box">
+          <h3>Quick Thickness Calibration</h3>
+          <p class="muted" style="margin:0 0 8px">
+            <strong>Overhead / side-on camera:</strong> load 1 known weight (e.g. 135), grab a frame, and click <em>1-pt Calibrate</em>.<br>
+            <strong>Angled / 3/4 camera:</strong> record 2 different known weights (e.g. 135 then 225) to automatically solve both perspective scale and outer-face overhang!
+          </p>
+          <div class="row">
+            <input type="number" step="0.5" id="calWeight" placeholder="Known total (e.g. 135)" style="width:155px">
+            <button class="sm primary" onclick="calibrateOnePoint()">1-pt Calibrate</button>
+            <button class="sm" onclick="recordCalSample()">Record 2-pt Sample</button>
+            <button class="sm" id="solveTwoPtBtn" style="display:none" onclick="solveTwoPoint()">Solve 2-pt</button>
+          </div>
+          <div id="calStatus" class="muted"></div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label>Sleeve length (mm)</label>
+            <input type="number" step="1" id="optSleeveLen" onchange="onControlChange()">
+          </div>
+          <div class="field">
+            <label>Outer face overhang (mm, 0 if straight overhead)</label>
+            <input type="number" step="1" id="optOuterFace" onchange="onControlChange()">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <div class="slider-head"><span>Plate sensitivity (plate_pixel_delta — lower detects faint plates)</span><span id="valPlateDelta">35</span></div>
+          <input type="range" id="slPlateDelta" min="10" max="80" step="1" oninput="onSlider('plate_pixel_delta', this.value, 'valPlateDelta', parseInt)">
+        </div>
+        <div class="slider-row">
+          <div class="slider-head"><span>Thickness / shape weight</span><span id="valShapeW">6.0</span></div>
+          <input type="range" id="slShapeW" min="1" max="15" step="0.5" oninput="onSlider('shape_weight', this.value, 'valShapeW', parseFloat)">
+        </div>
+        <div class="slider-row">
+          <div class="slider-head"><span>Length tolerance (mm)</span><span id="valLenTol">6.0</span></div>
+          <input type="range" id="slLenTol" min="2" max="25" step="0.5" oninput="onSlider('length_tolerance_mm', this.value, 'valLenTol', parseFloat)">
+        </div>
+        <div class="slider-row">
+          <div class="slider-head"><span>Tape color weight</span><span id="valColorW">4.0</span></div>
+          <input type="range" id="slColorW" min="1" max="10" step="0.5" oninput="onSlider('color_weight', this.value, 'valColorW', parseFloat)">
+        </div>
+        <div class="slider-row">
+          <div class="slider-head"><span>Tape hue tolerance (°)</span><span id="valHueTol">22</span></div>
+          <input type="range" id="slHueTol" min="8" max="45" step="1" oninput="onSlider('color_hue_tolerance', this.value, 'valHueTol', parseFloat)">
+        </div>
+        <div class="slider-row">
+          <div class="slider-head"><span>Tape min saturation (0–255)</span><span id="valMinSat">55</span></div>
+          <input type="range" id="slMinSat" min="20" max="150" step="5" oninput="onSlider('color_min_saturation', this.value, 'valMinSat', parseInt)">
+        </div>
+        <div class="slider-row">
+          <div class="slider-head"><span>Auto-apply confidence</span><span id="valAutoConf">0.80</span></div>
+          <input type="range" id="slAutoConf" min="0.5" max="0.98" step="0.02" oninput="onSlider('auto_apply_confidence', this.value, 'valAutoConf', parseFloat)">
+        </div>
+        <div class="slider-row">
+          <div class="slider-head"><span>Settle time after motion (s)</span><span id="valSettle">1.5</span></div>
+          <input type="range" id="slSettle" min="0.5" max="5.0" step="0.1" oninput="onSlider('settle_s', this.value, 'valSettle', parseFloat)">
+        </div>
+      </div>
+
+      <!-- TAB 3: PLATES & TAPE COLORS -->
+      <div id="tabPlates" class="tab-pane">
+        <div class="row">
+          <div class="field">
+            <label>Unit</label>
+            <select id="optUnit" onchange="onControlChange()">
+              <option value="lb">lb</option>
+              <option value="kg">kg</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Bar weight</label>
+            <input type="number" step="0.5" id="optBarWeight" onchange="onControlChange()">
+          </div>
+        </div>
+
+        <p class="muted" style="margin:0 0 8px">
+          Measure each plate's diameter &amp; thickness in mm. To use electrical tape as a backup or boost, choose a tape color or click <strong>Pick</strong> to sample the tape right off the camera photo.
+        </p>
+
+        <div style="overflow-x:auto">
+          <table>
+            <thead>
+              <tr>
+                <th>Wt</th>
+                <th>Qty</th>
+                <th>Dia mm</th>
+                <th>Thick mm</th>
+                <th>Rim Tape Color</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="platesBody"></tbody>
+          </table>
+        </div>
+
+        <div class="row" style="margin-top:10px">
+          <button class="sm primary" onclick="addPlate()">+ Add Plate</button>
+          <span class="spacer"></span>
+          <button class="sm" onclick="applyPreset('bumper_lb')">Bumpers (lb)</button>
+          <button class="sm" onclick="applyPreset('iron_lb')">Iron (lb)</button>
+          <button class="sm" onclick="applyPreset('bumper_kg')">Bumpers (kg)</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const STATE = {
+  cfg: null,
+  namedColors: {},
+  hasFrame: false,
+  hasRef: false,
+  view: 'edit',          // 'edit' | 'annotated' | 'reference'
+  tool: 'drag',          // 'drag' | 'box' | 'axis' | 'eyedropper'
+  eyedropperIdx: null,   // plate index being sampled
+  editB: false,
+  dirty: false,
+  img: null,
+  dragTarget: null,      // {kind: 'roi'|'axis', idx: number} | {kind: 'box'|'axis_new', start: [x,y]}
+  calSamples: [],
+};
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.display = 'none'; }, 3200);
+}
+
+function markDirty(flag = true) {
+  STATE.dirty = flag;
+  const btn = document.getElementById('saveBtn');
+  btn.textContent = flag ? 'Save & Apply *' : 'Save & Apply';
+  btn.className = flag ? 'save-dirty' : 'primary';
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, opts);
+  const text = await res.text();
+  let data = {};
+  try { data = JSON.parse(text); } catch { data = { error: text || res.statusText }; }
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+function switchTab(name) {
+  for (const [k, btnId, paneId] of [
+    ['test', 'tabBtnTest', 'tabTest'],
+    ['detect', 'tabBtnDetect', 'tabDetect'],
+    ['plates', 'tabBtnPlates', 'tabPlates'],
+  ]) {
+    document.getElementById(btnId).classList.toggle('active', k === name);
+    document.getElementById(paneId).classList.toggle('active', k === name);
+  }
+}
+
+function setTool(tool, eyedropperIdx = null) {
+  STATE.tool = tool;
+  STATE.eyedropperIdx = eyedropperIdx;
+  for (const [t, id] of [['drag', 'toolDragBtn'], ['box', 'toolBoxBtn'], ['axis', 'toolAxisBtn']]) {
+    document.getElementById(id).classList.toggle('active', tool === t);
+  }
+  const banner = document.getElementById('modeBanner');
+  const canvas = document.getElementById('canvas');
+  if (tool === 'eyedropper' && eyedropperIdx !== null) {
+    const p = STATE.cfg.plates[eyedropperIdx];
+    setView('edit');
+    banner.style.display = 'block';
+    banner.className = 'banner info';
+    banner.innerHTML = `<strong>Eyedropper active:</strong> Click directly on the colored electrical tape for the <strong>${p.weight} ${STATE.cfg.unit}</strong> plate in the image below. <button class="sm" style="margin-left:8px" onclick="setTool('drag')">Cancel</button>`;
+    canvas.style.cursor = 'crosshair';
+  } else if (tool === 'box') {
+    banner.style.display = 'block';
+    banner.className = 'banner info';
+    banner.textContent = 'Click and drag a rectangle around the sleeve and its plates.';
+    canvas.style.cursor = 'crosshair';
+  } else if (tool === 'axis') {
+    banner.style.display = 'block';
+    banner.className = 'banner info';
+    banner.textContent = 'Click at the inner collar (where the first plate sits) and drag to the outer tip of the sleeve.';
+    canvas.style.cursor = 'crosshair';
+  } else {
+    banner.style.display = 'none';
+    canvas.style.cursor = 'default';
+  }
+}
+
+function setView(view) {
+  STATE.view = view;
+  document.getElementById('viewEditBtn').classList.toggle('active', view === 'edit');
+  document.getElementById('viewAnnBtn').classList.toggle('active', view === 'annotated');
+  document.getElementById('viewRefBtn').classList.toggle('active', view === 'reference');
+  document.getElementById('canvasTools').style.display = view === 'edit' ? 'flex' : 'none';
+  renderView();
+}
+
+function renderView() {
+  const empty = document.getElementById('emptyState');
+  const canvas = document.getElementById('canvas');
+  const preview = document.getElementById('previewImg');
+  if (STATE.view === 'edit') {
+    preview.style.display = 'none';
+    if (STATE.img && STATE.img.complete && STATE.img.naturalWidth > 0) {
+      empty.style.display = 'none';
+      canvas.style.display = 'block';
+      drawCanvas();
+    } else {
+      canvas.style.display = 'none';
+      empty.style.display = 'block';
+    }
+  } else {
+    canvas.style.display = 'none';
+    const kind = STATE.view === 'annotated' ? 'annotated' : 'reference';
+    const ok = kind === 'reference' ? STATE.hasRef : !!STATE.hasAnnotated;
+    if (!ok) {
+      preview.style.display = 'none';
+      empty.style.display = 'block';
+      return;
+    }
+    empty.style.display = 'none';
+    preview.style.display = 'block';
+    preview.src = `api/frame?kind=${kind}&t=${Date.now()}`;
+  }
+}
+
+function activeSleeve(createIfMissing = false) {
+  const key = STATE.editB ? 'sleeve_b' : 'sleeve';
+  if (!STATE.cfg[key] && createIfMissing) {
+    STATE.cfg[key] = {
+      roi: [[0.35, 0.3], [0.68, 0.3], [0.68, 0.7], [0.35, 0.7]],
+      axis: [[0.38, 0.5], [0.65, 0.5]],
+      sleeve_length_mm: 415,
+      outer_face_mm: 0,
+    };
+  }
+  return STATE.cfg[key];
+}
+
+function toggleSleeveB(checked) {
+  STATE.editB = checked;
+  if (checked && !STATE.cfg.sleeve_b) {
+    STATE.cfg.sleeve_b = {
+      roi: [[0.08, 0.3], [0.32, 0.3], [0.32, 0.7], [0.08, 0.7]],
+      axis: [[0.30, 0.5], [0.10, 0.5]],
+      sleeve_length_mm: STATE.cfg.sleeve ? STATE.cfg.sleeve.sleeve_length_mm : 415,
+      outer_face_mm: STATE.cfg.sleeve ? (STATE.cfg.sleeve.outer_face_mm || 0) : 0,
+    };
+    markDirty(true);
+  }
+  syncControlsFromConfig();
+  drawCanvas();
+}
+
+function loadFrameImage() {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      STATE.img = img;
+      STATE.hasFrame = true;
+      renderView();
+      resolve(true);
+    };
+    img.onerror = () => resolve(false);
+    img.src = `api/frame?kind=undistorted&t=${Date.now()}`;
+  });
+}
+
+function drawCanvas() {
+  const canvas = document.getElementById('canvas');
+  const img = STATE.img;
+  if (!img || !img.naturalWidth || !STATE.cfg) return;
+  const w = img.naturalWidth, h = img.naturalHeight;
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, w, h);
+
+  const drawSleeve = (sl, isPrimary, isEditing) => {
+    if (!sl) return;
+    const roi = sl.roi || [];
+    if (roi.length >= 3) {
+      ctx.beginPath();
+      roi.forEach((p, i) => {
+        const x = p[0] * w, y = p[1] * h;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+      ctx.fillStyle = isPrimary ? 'rgba(250, 204, 21, 0.08)' : 'rgba(56, 189, 248, 0.08)';
+      ctx.fill();
+      ctx.strokeStyle = isPrimary ? '#facc15' : '#38bdf8';
+      ctx.lineWidth = Math.max(2, w / 420);
+      ctx.stroke();
+
+      if (isEditing) {
+        const r = Math.max(7, w / 120);
+        roi.forEach((p) => {
+          ctx.beginPath();
+          ctx.arc(p[0] * w, p[1] * h, r, 0, Math.PI * 2);
+          ctx.fillStyle = isPrimary ? '#facc15' : '#38bdf8';
+          ctx.fill();
+          ctx.strokeStyle = '#000';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        });
+      }
+    }
+
+    if (sl.axis && sl.axis.length === 2) {
+      const [p0, p1] = sl.axis;
+      const x0 = p0[0] * w, y0 = p0[1] * h, x1 = p1[0] * w, y1 = p1[1] * h;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = Math.max(3, w / 360);
+      ctx.stroke();
+
+      // 50 mm ticks along axis so user can judge scale visually.
+      const lenMm = sl.sleeve_length_mm || 415;
+      const dx = x1 - x0, dy = y1 - y0;
+      const dist = Math.hypot(dx, dy) || 1;
+      const nx = -dy / dist, ny = dx / dist;
+      const tickLen = Math.max(6, w / 140);
+      ctx.strokeStyle = 'rgba(134, 239, 172, 0.85)';
+      ctx.lineWidth = Math.max(1.5, w / 650);
+      for (let mm = 50; mm < lenMm; mm += 50) {
+        const f = mm / lenMm;
+        const tx = x0 + dx * f, ty = y0 + dy * f;
+        ctx.beginPath();
+        ctx.moveTo(tx - nx * tickLen, ty - ny * tickLen);
+        ctx.lineTo(tx + nx * tickLen, ty + ny * tickLen);
+        ctx.stroke();
+      }
+
+      if (isEditing) {
+        const r = Math.max(9, w / 100);
+        for (const [pt, lbl, col] of [[p0, 'C', '#22c55e'], [p1, 'T', '#ef4444']]) {
+          const cx = pt[0] * w, cy = pt[1] * h;
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.fillStyle = col;
+          ctx.fill();
+          ctx.strokeStyle = '#000';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.fillStyle = '#fff';
+          ctx.font = `bold ${Math.max(11, Math.round(r * 1.15))}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(lbl, cx, cy);
+        }
+      }
+    }
+  };
+
+  drawSleeve(STATE.cfg.sleeve, true, !STATE.editB);
+  if (STATE.cfg.sleeve_b) drawSleeve(STATE.cfg.sleeve_b, false, STATE.editB);
+}
+
+function canvasNormCoords(ev) {
+  const canvas = document.getElementById('canvas');
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+  const y = Math.max(0, Math.min(1, (ev.clientY - rect.top) / rect.height));
+  return [x, y];
+}
+
+function setupCanvasPointer() {
+  const canvas = document.getElementById('canvas');
+  canvas.addEventListener('pointerdown', async (ev) => {
+    if (!STATE.img || !STATE.cfg) return;
+    const [nx, ny] = canvasNormCoords(ev);
+
+    if (STATE.tool === 'eyedropper' && STATE.eyedropperIdx !== null) {
+      try {
+        const res = await api('api/sample_color', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ x: nx, y: ny }),
+        });
+        const p = STATE.cfg.plates[STATE.eyedropperIdx];
+        p.color = res.nearest_name;
+        p.color_hsv = res.hsv;
+        markDirty(true);
+        renderPlatesTable();
+        toast(`Sampled ${res.nearest_name} (${res.hex}) for ${p.weight} ${STATE.cfg.unit}`);
+        setTool('drag');
+      } catch (e) {
+        toast(`Eyedropper error: ${e.message}`);
+      }
+      return;
+    }
+
+    canvas.setPointerCapture(ev.pointerId);
+    const sl = activeSleeve(true);
+
+    if (STATE.tool === 'box') {
+      STATE.dragTarget = { kind: 'box', start: [nx, ny] };
+      sl.roi = [[nx, ny], [nx, ny], [nx, ny], [nx, ny]];
+      markDirty(true);
+      drawCanvas();
+      return;
+    }
+    if (STATE.tool === 'axis') {
+      STATE.dragTarget = { kind: 'axis_new', start: [nx, ny] };
+      sl.axis = [[nx, ny], [nx, ny]];
+      markDirty(true);
+      drawCanvas();
+      return;
+    }
+
+    // Drag nearest handle (axis handles have priority).
+    const hitDist = 0.035;
+    let best = null, bestD = hitDist;
+    (sl.axis || []).forEach((pt, idx) => {
+      const d = Math.hypot(pt[0] - nx, pt[1] - ny);
+      if (d < bestD) { bestD = d; best = { kind: 'axis', idx }; }
+    });
+    if (!best) {
+      (sl.roi || []).forEach((pt, idx) => {
+        const d = Math.hypot(pt[0] - nx, pt[1] - ny);
+        if (d < bestD) { bestD = d; best = { kind: 'roi', idx }; }
+      });
+    }
+    STATE.dragTarget = best;
+  });
+
+  canvas.addEventListener('pointermove', (ev) => {
+    if (!STATE.dragTarget) return;
+    const [nx, ny] = canvasNormCoords(ev);
+    const sl = activeSleeve(true);
+    if (STATE.dragTarget.kind === 'box') {
+      const [sx, sy] = STATE.dragTarget.start;
+      const x0 = Math.min(sx, nx), x1 = Math.max(sx, nx);
+      const y0 = Math.min(sy, ny), y1 = Math.max(sy, ny);
+      sl.roi = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+    } else if (STATE.dragTarget.kind === 'axis_new') {
+      sl.axis = [STATE.dragTarget.start, [nx, ny]];
+    } else if (STATE.dragTarget.kind === 'axis') {
+      sl.axis[STATE.dragTarget.idx] = [nx, ny];
+    } else if (STATE.dragTarget.kind === 'roi') {
+      sl.roi[STATE.dragTarget.idx] = [nx, ny];
+    }
+    markDirty(true);
+    drawCanvas();
+  });
+
+  const endDrag = () => {
+    if (STATE.dragTarget && (STATE.dragTarget.kind === 'box' || STATE.dragTarget.kind === 'axis_new')) {
+      setTool('drag');
+    }
+    STATE.dragTarget = null;
+  };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+}
+
+function hsvToHex(hsv) {
+  if (!hsv) return null;
+  const h = ((hsv[0] % 360) + 360) % 360;
+  const s = hsv[1] / 100, v = hsv[2] / 100;
+  const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) [r, g, b] = [c, x, 0];
+  else if (h < 120) [r, g, b] = [x, c, 0];
+  else if (h < 180) [r, g, b] = [0, c, x];
+  else if (h < 240) [r, g, b] = [0, x, c];
+  else if (h < 300) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  const hex = (n) => Math.round((n + m) * 255).toString(16).padStart(2, '0');
+  return `#${hex(r)}${hex(g)}${hex(b)}`;
+}
+
+function plateColorHex(p) {
+  if (p.color_hsv) return hsvToHex(p.color_hsv);
+  if (p.color && STATE.namedColors[p.color]) return STATE.namedColors[p.color];
+  return 'transparent';
+}
+
+function renderPlatesTable() {
+  const tbody = document.getElementById('platesBody');
+  const names = Object.keys(STATE.namedColors);
+  tbody.innerHTML = '';
+  STATE.cfg.plates.forEach((p, idx) => {
+    const tr = document.createElement('tr');
+    const sw = plateColorHex(p);
+    const opts = ['<option value="">None</option>']
+      .concat(names.map((n) => `<option value="${n}" ${p.color === n ? 'selected' : ''}>${n}</option>`))
+      .join('');
+    tr.innerHTML = `
+      <td><input type="number" step="0.5" value="${p.weight}" onchange="updatePlate(${idx},'weight',parseFloat(this.value))"></td>
+      <td><input type="number" step="2" min="0" value="${p.count}" onchange="updatePlate(${idx},'count',parseInt(this.value,10))"></td>
+      <td><input type="number" step="1" min="0" value="${p.diameter_mm}" onchange="updatePlate(${idx},'diameter_mm',parseFloat(this.value))"></td>
+      <td><input type="number" step="1" min="0" value="${p.thickness_mm}" onchange="updatePlate(${idx},'thickness_mm',parseFloat(this.value))"></td>
+      <td>
+        <div style="display:flex;align-items:center;gap:4px">
+          <span class="swatch" style="background:${sw}" title="${p.color_hsv ? 'Sampled HSV: ' + p.color_hsv.join(', ') : (p.color || 'No tape color')}"></span>
+          <select onchange="updatePlateColor(${idx}, this.value)">${opts}</select>
+          <button class="sm" title="Click on this plate's tape in the camera photo" onclick="setTool('eyedropper', ${idx})">Pick</button>
+          ${p.color_hsv ? `<button class="sm" title="Reset sampled HSV back to preset" onclick="clearPlateHsv(${idx})">×</button>` : ''}
+        </div>
+      </td>
+      <td><button class="sm danger" onclick="removePlate(${idx})">✕</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function updatePlate(idx, field, val) {
+  if (Number.isNaN(val)) return;
+  STATE.cfg.plates[idx][field] = val;
+  markDirty(true);
+}
+function updatePlateColor(idx, val) {
+  STATE.cfg.plates[idx].color = val || null;
+  delete STATE.cfg.plates[idx].color_hsv;
+  markDirty(true);
+  renderPlatesTable();
+}
+function clearPlateHsv(idx) {
+  delete STATE.cfg.plates[idx].color_hsv;
+  markDirty(true);
+  renderPlatesTable();
+}
+function addPlate() {
+  STATE.cfg.plates.push({ weight: 10, count: 2, diameter_mm: 450, thickness_mm: 25, color: null });
+  markDirty(true);
+  renderPlatesTable();
+}
+function removePlate(idx) {
+  STATE.cfg.plates.splice(idx, 1);
+  markDirty(true);
+  renderPlatesTable();
+}
+
+function applyPreset(name) {
+  if (name === 'bumper_lb') {
+    STATE.cfg.unit = 'lb';
+    STATE.cfg.bar_weight = 45;
+    STATE.cfg.plates = [
+      { weight: 45, count: 6, diameter_mm: 450, thickness_mm: 76, color: null },
+      { weight: 35, count: 2, diameter_mm: 450, thickness_mm: 58, color: null },
+      { weight: 25, count: 2, diameter_mm: 450, thickness_mm: 43, color: null },
+      { weight: 10, count: 2, diameter_mm: 450, thickness_mm: 25, color: null },
+      { weight: 5, count: 2, diameter_mm: 230, thickness_mm: 20, color: null },
+      { weight: 2.5, count: 2, diameter_mm: 190, thickness_mm: 16, color: null },
+    ];
+  } else if (name === 'iron_lb') {
+    STATE.cfg.unit = 'lb';
+    STATE.cfg.bar_weight = 45;
+    STATE.cfg.plates = [
+      { weight: 45, count: 6, diameter_mm: 450, thickness_mm: 36, color: null },
+      { weight: 35, count: 2, diameter_mm: 405, thickness_mm: 32, color: null },
+      { weight: 25, count: 2, diameter_mm: 345, thickness_mm: 28, color: null },
+      { weight: 10, count: 2, diameter_mm: 255, thickness_mm: 22, color: null },
+      { weight: 5, count: 2, diameter_mm: 205, thickness_mm: 18, color: null },
+      { weight: 2.5, count: 2, diameter_mm: 165, thickness_mm: 14, color: null },
+    ];
+  } else if (name === 'bumper_kg') {
+    STATE.cfg.unit = 'kg';
+    STATE.cfg.bar_weight = 20;
+    STATE.cfg.plates = [
+      { weight: 25, count: 2, diameter_mm: 450, thickness_mm: 64, color: null },
+      { weight: 20, count: 4, diameter_mm: 450, thickness_mm: 54, color: null },
+      { weight: 15, count: 2, diameter_mm: 450, thickness_mm: 44, color: null },
+      { weight: 10, count: 2, diameter_mm: 450, thickness_mm: 32, color: null },
+      { weight: 5, count: 2, diameter_mm: 450, thickness_mm: 24, color: null },
+      { weight: 2.5, count: 2, diameter_mm: 210, thickness_mm: 18, color: null },
+    ];
+  }
+  syncControlsFromConfig();
+  markDirty(true);
+}
+
+function syncControlsFromConfig() {
+  const c = STATE.cfg;
+  const th = c.thresholds || {};
+  const sl = activeSleeve(false);
+  document.getElementById('optUseShape').checked = !!c.use_shape;
+  document.getElementById('optUseColor').checked = c.use_color !== false;
+  document.getElementById('optUseOcr').checked = c.use_ocr !== false;
+  document.getElementById('optUnit').value = c.unit || 'lb';
+  document.getElementById('optBarWeight').value = c.bar_weight ?? 45;
+  document.getElementById('optSleeveLen').value = sl ? sl.sleeve_length_mm : 415;
+  document.getElementById('optOuterFace').value = sl ? (sl.outer_face_mm || 0) : 0;
+
+  const setSl = (slId, valId, val, fmt) => {
+    document.getElementById(slId).value = val;
+    document.getElementById(valId).textContent = fmt ? fmt(val) : val;
+  };
+  setSl('slPlateDelta', 'valPlateDelta', th.plate_pixel_delta ?? 35);
+  setSl('slShapeW', 'valShapeW', th.shape_weight ?? 6.0, (v) => Number(v).toFixed(1));
+  setSl('slLenTol', 'valLenTol', th.length_tolerance_mm ?? 6.0, (v) => Number(v).toFixed(1));
+  setSl('slColorW', 'valColorW', th.color_weight ?? 4.0, (v) => Number(v).toFixed(1));
+  setSl('slHueTol', 'valHueTol', th.color_hue_tolerance ?? 22);
+  setSl('slMinSat', 'valMinSat', th.color_min_saturation ?? 55);
+  setSl('slAutoConf', 'valAutoConf', th.auto_apply_confidence ?? 0.8, (v) => Number(v).toFixed(2));
+  setSl('slSettle', 'valSettle', th.settle_s ?? 1.5, (v) => Number(v).toFixed(1));
+
+  renderPlatesTable();
+}
+
+function onControlChange() {
+  const c = STATE.cfg;
+  c.use_shape = document.getElementById('optUseShape').checked;
+  c.use_color = document.getElementById('optUseColor').checked;
+  c.use_ocr = document.getElementById('optUseOcr').checked;
+  c.unit = document.getElementById('optUnit').value;
+  c.bar_weight = parseFloat(document.getElementById('optBarWeight').value) || 45;
+  const sl = activeSleeve(false);
+  if (sl) {
+    sl.sleeve_length_mm = parseFloat(document.getElementById('optSleeveLen').value) || 415;
+    sl.outer_face_mm = Math.max(0, parseFloat(document.getElementById('optOuterFace').value) || 0);
+  }
+  markDirty(true);
+  drawCanvas();
+}
+
+function onSlider(key, raw, labelId, cast) {
+  const v = cast(raw);
+  STATE.cfg.thresholds[key] = v;
+  document.getElementById(labelId).textContent = key === 'auto_apply_confidence' ? v.toFixed(2) : (Number.isInteger(v) ? String(v) : v.toFixed(1));
+  markDirty(true);
+}
+
+function updateStatusPills(data) {
+  document.getElementById('verPill').textContent = `v${data.version}`;
+  const cam = document.getElementById('camPill');
+  if (data.camera_mode === 'rtsp') { cam.textContent = 'Camera: RTSP'; cam.className = 'pill ok'; }
+  else if (data.camera_mode === 'entity') { cam.textContent = `Camera: ${data.camera_entity}`; cam.className = 'pill ok'; }
+  else { cam.textContent = 'Camera: Not set'; cam.className = 'pill warn'; }
+
+  STATE.hasRef = !!data.has_reference;
+  const ref = document.getElementById('refPill');
+  ref.textContent = STATE.hasRef ? 'Empty bar: Saved' : 'Empty bar: None';
+  ref.className = STATE.hasRef ? 'pill ok' : 'pill warn';
+  document.getElementById('clearRefBtn').style.display = STATE.hasRef ? 'inline-block' : 'none';
+
+  const ocr = document.getElementById('ocrPill');
+  ocr.textContent = data.ocr_available ? 'OCR: Ready' : 'OCR: Unavailable';
+  ocr.className = data.ocr_available ? 'pill ok' : 'pill warn';
+}
+
+async function grabFrame() {
+  try {
+    await api('api/grab', { method: 'POST' });
+    await loadFrameImage();
+    toast('Grabbed live frame');
+  } catch (e) {
+    toast(`Grab failed: ${e.message}`);
+  }
+}
+
+async function uploadPhoto(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  try {
+    const buf = await file.arrayBuffer();
+    await api('api/upload_frame', { method: 'POST', body: buf });
+    await loadFrameImage();
+    toast(`Loaded ${file.name}`);
+  } catch (e) {
+    toast(`Upload failed: ${e.message}`);
+  } finally {
+    input.value = '';
+  }
+}
+
+async function saveReference(useCurrent) {
+  try {
+    await api('api/reference', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ use_current: useCurrent }),
+    });
+    STATE.hasRef = true;
+    await refreshStatus();
+    if (!useCurrent) await loadFrameImage();
+    toast('Saved empty-bar reference');
+  } catch (e) {
+    toast(`Save reference failed: ${e.message}`);
+  }
+}
+
+async function clearReference() {
+  try {
+    await api('api/reference', { method: 'DELETE' });
+    STATE.hasRef = false;
+    await refreshStatus();
+    toast('Cleared empty-bar reference');
+  } catch (e) {
+    toast(`Clear failed: ${e.message}`);
+  }
+}
+
+async function saveConfig() {
+  try {
+    const res = await api('api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: STATE.cfg }),
+    });
+    STATE.cfg = res.config;
+    markDirty(false);
+    syncControlsFromConfig();
+    toast('Saved & applied live!');
+  } catch (e) {
+    toast(`Save failed: ${e.message}`);
+  }
+}
+
+async function runTest(grabFresh) {
+  const errEl = document.getElementById('testError');
+  errEl.style.display = 'none';
+  try {
+    const exp = document.getElementById('expectedInput').value;
+    const pub = document.getElementById('publishCheck').checked;
+    const res = await api('api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        config: STATE.cfg,
+        expected_total: exp !== '' ? parseFloat(exp) : null,
+        publish: pub,
+        grab_fresh: grabFresh,
+      }),
+    });
+    STATE.hasAnnotated = true;
+    if (grabFresh || !STATE.hasFrame) await loadFrameImage();
+    showAnalysisResult(res);
+    if (pub) toast('Published test reading to Home Assistant');
+  } catch (e) {
+    errEl.textContent = e.message;
+    errEl.style.display = 'block';
+  }
+}
+
+function showAnalysisResult(res) {
+  const r = res.reading;
+  document.getElementById('resultBox').style.display = 'block';
+  document.getElementById('resWeight').textContent = r.detected_weight === null ? 'Unknown' : `${r.detected_weight} ${r.unit}`;
+  const sideText = (r.per_side_breakdown && r.per_side_breakdown.length)
+    ? `Per side: ${r.per_side_breakdown.join(' + ')} ${r.unit}`
+    : (r.detected_weight !== null ? 'Empty bar' : 'No breakdown');
+  document.getElementById('resBreakdown').textContent = sideText;
+
+  const st = document.getElementById('resStatus');
+  st.textContent = r.status;
+  st.className = 'pill ' + (r.status === 'ok' ? 'ok' : (r.status === 'asymmetric' || r.status === 'outer_plate_mismatch' ? 'err' : 'warn'));
+  document.getElementById('resConf').textContent = `Confidence: ${Math.round((r.confidence || 0) * 100)}%`;
+
+  document.getElementById('resMeasured').textContent = res.measured_stack_mm !== null ? `${res.measured_stack_mm} mm` : '—';
+  document.getElementById('resPredicted').textContent = res.predicted_stack_mm !== null ? `${res.predicted_stack_mm} mm` : '—';
+
+  const reasons = document.getElementById('resReasons');
+  reasons.innerHTML = (r.reasons || []).map((x) => `<div class="banner warn" style="margin:4px 0;padding:6px 9px">${x}</div>`).join('');
+
+  const cWrap = document.getElementById('resColorsWrap');
+  if (res.color_bands && res.color_bands.length) {
+    cWrap.style.display = 'block';
+    document.getElementById('resColors').innerHTML = res.color_bands.map((b) => {
+      const hx = STATE.namedColors[b.color] || '#888';
+      return `<span class="chip"><span class="swatch" style="background:${hx}"></span>${b.color} ×${b.estimated_plates} (${b.width_mm} mm)</span>`;
+    }).join('');
+  } else {
+    cWrap.style.display = 'none';
+  }
+
+  const oWrap = document.getElementById('resOcrWrap');
+  if (r.raw_ocr_matches && r.raw_ocr_matches.length) {
+    oWrap.style.display = 'block';
+    document.getElementById('resOcr').innerHTML = r.raw_ocr_matches.map((m) =>
+      `<span class="chip">${m.text} → ${m.weight} (${Math.round(m.score * 100)}%)</span>`
+    ).join('');
+  } else {
+    oWrap.style.display = 'none';
+  }
+
+  const aWrap = document.getElementById('resAltsWrap');
+  if (r.alternatives && r.alternatives.length) {
+    aWrap.style.display = 'block';
+    document.getElementById('resAlts').innerHTML = r.alternatives.map((a) =>
+      `<tr><td>${a.total} ${r.unit}</td><td>${a.per_side} ${r.unit}</td><td>${Math.round(a.probability * 100)}%</td></tr>`
+    ).join('');
+  } else {
+    aWrap.style.display = 'none';
+  }
+
+  if (res.has_diagnostic) {
+    document.getElementById('diagCard').style.display = 'block';
+    document.getElementById('diagImg').src = `api/frame?kind=diagnostic&t=${Date.now()}`;
+    document.getElementById('diagSummary').textContent = res.measured_stack_mm !== null ? `Measured ${res.measured_stack_mm} mm` : '';
+  }
+  if (STATE.view === 'annotated') renderView();
+}
+
+async function calibrateOnePoint() {
+  const kw = parseFloat(document.getElementById('calWeight').value);
+  const st = document.getElementById('calStatus');
+  if (!kw) { st.textContent = 'Enter the true total weight on the bar first (e.g. 135).'; return; }
+  try {
+    const res = await api('api/calibrate_thickness', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: STATE.cfg, known_weight: kw }),
+    });
+    activeSleeve(true).sleeve_length_mm = res.sleeve_length_mm;
+    syncControlsFromConfig();
+    markDirty(true);
+    drawCanvas();
+    st.textContent = `Calibrated sleeve_length_mm = ${res.sleeve_length_mm} mm (measured ${res.measured_px} px for ${res.true_mm} mm). Re-test & Save!`;
+    toast('Updated sleeve_length_mm');
+  } catch (e) {
+    st.textContent = `Calibration error: ${e.message}`;
+  }
+}
+
+async function recordCalSample() {
+  const kw = parseFloat(document.getElementById('calWeight').value);
+  const st = document.getElementById('calStatus');
+  if (!kw) { st.textContent = 'Enter the true total weight on the bar first (e.g. 135).'; return; }
+  try {
+    const res = await api('api/calibrate_thickness', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: STATE.cfg, known_weight: kw }),
+    });
+    STATE.calSamples.push({ weight: kw, true_mm: res.true_mm, measured_px: res.measured_px, strip_length_px: res.strip_length_px });
+    if (STATE.calSamples.length > 2) STATE.calSamples.shift();
+    const summary = STATE.calSamples.map((s, i) => `#${i + 1}: ${s.weight} ${STATE.cfg.unit} (${s.true_mm} mm → ${s.measured_px} px)`).join(' | ');
+    st.textContent = `Recorded: ${summary}`;
+    document.getElementById('solveTwoPtBtn').style.display = STATE.calSamples.length >= 2 ? 'inline-block' : 'none';
+  } catch (e) {
+    st.textContent = `Sample error: ${e.message}`;
+  }
+}
+
+async function solveTwoPoint() {
+  const st = document.getElementById('calStatus');
+  try {
+    const res = await api('api/calibrate_thickness', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: STATE.cfg, samples: STATE.calSamples }),
+    });
+    const sl = activeSleeve(true);
+    sl.sleeve_length_mm = res.sleeve_length_mm;
+    sl.outer_face_mm = res.outer_face_mm;
+    STATE.calSamples = [];
+    document.getElementById('solveTwoPtBtn').style.display = 'none';
+    syncControlsFromConfig();
+    markDirty(true);
+    drawCanvas();
+    st.textContent = `Solved 2-point angled calibration! sleeve_length_mm = ${res.sleeve_length_mm} mm, outer_face_mm = ${res.outer_face_mm} mm. Re-test & Save!`;
+    toast('2-point calibration applied');
+  } catch (e) {
+    st.textContent = `Solve error: ${e.message}`;
+  }
+}
+
+async function refreshStatus() {
+  const data = await api('api/state');
+  updateStatusPills(data);
+  return data;
+}
+
+async function init() {
+  setupCanvasPointer();
+  try {
+    const data = await api('api/state');
+    STATE.cfg = data.config;
+    STATE.namedColors = data.named_colors || {};
+    updateStatusPills(data);
+    syncControlsFromConfig();
+    if (data.has_frame) {
+      await loadFrameImage();
+    } else if (data.camera_configured) {
+      // Grab an initial frame automatically on open so the UI feels alive immediately.
+      try { await grabFrame(); } catch {}
+    }
+  } catch (e) {
+    toast(`Failed to load state: ${e.message}`);
+  }
+}
+
+init();
+</script>
+</body>
+</html>

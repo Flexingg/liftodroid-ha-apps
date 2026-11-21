@@ -5,7 +5,9 @@ unit: lb            # lb or kg: what your plates are stamped in
 bar_weight: 45      # the phone sends the bar from Liftosaur's equipment; this is the fallback
 
 # Plates you own, BOTH sides together. Measure yours: diameter across the face, thickness at the hub (mm).
-# The phone sends counts from Liftosaur's equipment; sizes always come from here.
+# The phone sends counts from Liftosaur's equipment; sizes and optional tape colors always come from here.
+# Optional: wrap colored electrical tape around each plate's outer circumference and add `color: red` (or pick it
+# directly from a live photo in the Web UI).
 plates:
   - {weight: 45,  count: 6, diameter_mm: 450, thickness_mm: 45}
   - {weight: 35,  count: 2, diameter_mm: 405, thickness_mm: 38}
@@ -32,6 +34,7 @@ sleeve:
   axis: [[0.42, 0.55], [0.62, 0.55]]
   roi: [[0.40, 0.35], [0.66, 0.35], [0.66, 0.75], [0.40, 0.75]]
   sleeve_length_mm: 415     # collar to tip; 16.25" on most power bars
+  outer_face_mm: 0          # >0 for angled 3/4 cameras (auto-solved by 2-pt calibration in the Web UI)
 
 # Optional: the other sleeve, to warn about uneven loading.
 # sleeve_b:
@@ -42,9 +45,12 @@ sleeve:
 # storage_roi: [[0.75, 0.2], [0.95, 0.2], [0.95, 0.8], [0.75, 0.8]]
 # bench_roi:   [[0.35, 0.6], [0.55, 0.6], [0.55, 0.95], [0.35, 0.95]]
 
-# The empty sleeve (bar racked, no plates), undistorted: `calibrate reference`. Makes plate detection far more robust.
+# The empty sleeve (bar racked, no plates), undistorted. Capture with one click in the Web UI.
 reference_image: /config/reference.png
 
+use_shape: true
+use_color: true
+use_ocr: true
 analysis_fps: 2
 
 thresholds:
@@ -55,5 +61,10 @@ thresholds:
   auto_apply_confidence: 0.8
   ocr_min_score: 0.55
   plate_pixel_delta: 35
-  shape_weight: 6.0         # how decisively plate shape counts; tune with `calibrate evaluate`
+  shape_weight: 6.0         # how decisively plate shape/thickness counts
   length_tolerance_mm: 6.0
+  color_weight: 4.0         # how decisively rim tape colors count
+  color_hue_tolerance: 22.0
+  color_min_saturation: 55
+  color_min_value: 40
+  color_min_fraction: 0.08

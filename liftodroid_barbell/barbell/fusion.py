@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass, field
 
 import numpy as np
 
+from .colors import ColorProfile
 from .config import Config
 from .inventory import Loading, planned_loading, side_loadings, stack_thickness_mm
 from .ocr import Denomination
@@ -27,6 +28,8 @@ class SideEvidence:
     profile: Profile | None
     # Denominations read on this sleeve, each with its position along the sleeve (mm from the collar) if known.
     denominations: tuple[tuple[Denomination, float | None], ...] = ()
+    # Optional colored electrical tape bands detected along the sleeve rim.
+    colors: ColorProfile | None = None
 
 
 @dataclass
@@ -43,6 +46,7 @@ class SideResult:
     alternatives: list[tuple[tuple[float, ...], float]]
     structural: bool
     lettering: bool
+    colored: bool = False
 
 
 @dataclass
@@ -61,30 +65,49 @@ class Reading:
     frame_timestamp: float | None = None
     last_motion_ts: float | None = None
     context: dict | None = None
+    color_bands: list[dict] = field(default_factory=list)
+    measured_stack_mm: float | None = None
 
     def to_payload(self) -> dict:
         return asdict(self)
 
 
-def _predicted_heights(cfg: Config, loading: Loading, x_mm: np.ndarray) -> np.ndarray | None:
+def _outer_face_extension(cfg: Config, loading: Loading, outer_face_mm: float) -> float:
+    if outer_face_mm <= 0.0 or not loading.plates:
+        return 0.0
+    outer = cfg.plate_by_weight(loading.outermost)
+    if outer is None or outer.diameter_mm <= 0:
+        return outer_face_mm
+    max_d = max((p.diameter_mm for p in cfg.plates if p.diameter_mm > 0), default=outer.diameter_mm)
+    return outer_face_mm * (outer.diameter_mm / max_d)
+
+
+def predicted_stack_mm(cfg: Config, loading: Loading, outer_face_mm: float = 0.0) -> float:
+    return stack_thickness_mm(cfg, loading) + _outer_face_extension(cfg, loading, outer_face_mm)
+
+
+def _predicted_heights(cfg: Config, loading: Loading, x_mm: np.ndarray, outer_face_mm: float = 0.0) -> np.ndarray | None:
     out = np.zeros_like(x_mm, dtype=np.float32)
     pos = 0.0
-    for w in loading.plates:
+    face_ext = _outer_face_extension(cfg, loading, outer_face_mm)
+    n = len(loading.plates)
+    for i, w in enumerate(loading.plates):
         p = cfg.plate_by_weight(w)
         if p is None or p.thickness_mm <= 0 or p.diameter_mm <= 0:
             return None  # sizes unknown: no structural prediction
-        out[(x_mm >= pos) & (x_mm < pos + p.thickness_mm)] = p.diameter_mm
-        pos += p.thickness_mm
+        width = p.thickness_mm + (face_ext if i == n - 1 else 0.0)
+        out[(x_mm >= pos) & (x_mm < pos + width)] = p.diameter_mm
+        pos += width
     return out
 
 
-def structural_log_likelihood(cfg: Config, loading: Loading, prof: Profile) -> float | None:
+def structural_log_likelihood(cfg: Config, loading: Loading, prof: Profile, outer_face_mm: float = 0.0) -> float | None:
     if prof is None:
         return None
-    pred_len = stack_thickness_mm(cfg, loading)
+    pred_len = predicted_stack_mm(cfg, loading, outer_face_mm)
     span = max(prof.stack_length_mm, pred_len) + 20.0
     x = np.arange(0.0, span, 2.0)
-    pred = _predicted_heights(cfg, loading, x)
+    pred = _predicted_heights(cfg, loading, x, outer_face_mm)
     if pred is None:
         return None
     obs = prof.height_at_mm(x)
@@ -102,10 +125,31 @@ def structural_log_likelihood(cfg: Config, loading: Loading, prof: Profile) -> f
     return -th.shape_weight * err - 0.5 * len_err * len_err
 
 
+def color_log_likelihood(cfg: Config, loading: Loading, col: ColorProfile | None) -> float | None:
+    """Score [loading] against colored electrical tape bands detected along the sleeve rim."""
+    if col is None or not col.configured_colors:
+        return None
+    expected: dict[str, int] = {c: 0 for c in col.configured_colors}
+    for w in loading.plates:
+        p = cfg.plate_by_weight(w)
+        if p is not None and p.color_key in expected:
+            expected[p.color_key] += 1
+    ll = 0.0
+    weight = float(cfg.thresholds.color_weight)
+    for c in col.configured_colors:
+        obs_n = col.count_by_color.get(c, 0)
+        exp_n = expected[c]
+        diff = abs(exp_n - obs_n)
+        if diff:
+            ll -= weight * diff
+    return ll
+
+
 def lettering_log_likelihood(loading: Loading, side: SideEvidence) -> float:
     ll = 0.0
-    if side.profile is None and side.denominations:
-        # No side view of the sleeve: the camera faces the plates, so the clearest lettering is on the OUTER plate
+    has_other = (side.profile is not None) or (side.colors is not None and side.colors.has_evidence)
+    if not has_other and side.denominations:
+        # No side view or rim tape: the camera faces the plates, so the clearest lettering is on the OUTER plate
         # (bumpers hide everything behind it). A loading whose outer plate is something else can't explain it.
         best = max(side.denominations, key=lambda dp: dp[0].score)[0]
         if loading.outermost is None or abs(loading.outermost - best.weight) > 1e-6:
@@ -119,23 +163,29 @@ def lettering_log_likelihood(loading: Loading, side: SideEvidence) -> float:
     return ll
 
 
-def score_side(cfg: Config, side: SideEvidence, expected_side: float | None, candidates: list[Loading] | None = None) -> SideResult | None:
+def score_side(cfg: Config, side: SideEvidence, expected_side: float | None, candidates: list[Loading] | None = None,
+               outer_face_mm: float = 0.0) -> SideResult | None:
     loadings = candidates if candidates is not None else side_loadings(cfg.plates)
     has_struct = side.profile is not None and side.profile.valid.any()
+    has_color = side.colors is not None and side.colors.has_evidence
     has_text = bool(side.denominations)
     if not loadings:
         return None
     scored: list[Candidate] = []
     any_struct = False
+    any_color = False
     for l in loadings:
-        s = structural_log_likelihood(cfg, l, side.profile) if has_struct else None
+        s = structural_log_likelihood(cfg, l, side.profile, outer_face_mm) if has_struct else None
         any_struct |= s is not None
-        ll = (s or 0.0) + lettering_log_likelihood(l, side)
+        # Only score color when either tape bands were detected OR structure already gives evidence (e.g. empty bar).
+        col_ll = color_log_likelihood(cfg, l, side.colors) if (has_color or (has_struct and side.colors is not None)) else None
+        any_color |= (col_ll is not None and has_color)
+        ll = (s or 0.0) + (col_ll or 0.0) + lettering_log_likelihood(l, side)
         if expected_side is not None and abs(l.side_weight - expected_side) < 1e-6:
             ll += math.log(2.0)
         ll -= 0.03 * len(l.plates)  # among equals, the fewer-plates loading is how people load
         scored.append(Candidate(l, ll))
-    if not any_struct and not has_text:
+    if not any_struct and not any_color and not has_text:
         return None
     m = max(c.log_score for c in scored)
     z = sum(math.exp(c.log_score - m) for c in scored)
@@ -156,13 +206,15 @@ def score_side(cfg: Config, side: SideEvidence, expected_side: float | None, can
         alternatives.append(((sw,), by_side[sw]))
         if len(alternatives) == 3:
             break
-    return SideResult(best.loading, by_side[best_side], alternatives, any_struct, has_text)
+    return SideResult(best.loading, by_side[best_side], alternatives, any_struct, has_text, any_color)
 
 
 def fuse(cfg: Config, side_a: SideEvidence, side_b: SideEvidence | None = None, expected_total: float | None = None) -> Reading:
     th = cfg.thresholds
     expected_side = (expected_total - cfg.bar_weight) / 2 if expected_total is not None else None
-    a = score_side(cfg, side_a, expected_side)
+    face_a = cfg.sleeve.outer_face_mm if cfg.sleeve is not None else 0.0
+    face_b = cfg.sleeve_b.outer_face_mm if cfg.sleeve_b is not None else face_a
+    a = score_side(cfg, side_a, expected_side, outer_face_mm=face_a)
     raw = [
         {"weight": d.weight, "score": round(d.score, 3), "text": d.text, "sleeve": "a", "position_mm": None if p is None else round(p, 1)}
         for d, p in side_a.denominations
@@ -172,27 +224,32 @@ def fuse(cfg: Config, side_a: SideEvidence, side_b: SideEvidence | None = None, 
             {"weight": d.weight, "score": round(d.score, 3), "text": d.text, "sleeve": "b", "position_mm": None if p is None else round(p, 1)}
             for d, p in side_b.denominations
         ]
+    bands = [b.to_dict() for b in side_a.colors.bands] if side_a.colors is not None else []
+    measured_mm = round(side_a.profile.stack_length_mm, 1) if side_a.profile is not None else None
     if a is None:
-        return Reading(None, cfg.unit, 0.0, [], None, None, raw, True, "no_evidence", ["The sleeve couldn't be read: nothing to go on."])
-    if side_a.profile is None and side_a.denominations:
+        return Reading(None, cfg.unit, 0.0, [], None, None, raw, True, "no_evidence",
+                       ["The sleeve couldn't be read: nothing to go on."], color_bands=bands, measured_stack_mm=measured_mm)
+    if side_a.profile is None and not a.colored and side_a.denominations:
         return _outer_plate_only(cfg, side_a, expected_total, raw)
     reasons: list[str] = []
-    b = score_side(cfg, side_b, expected_side) if side_b is not None else None
+    b = score_side(cfg, side_b, expected_side, outer_face_mm=face_b) if side_b is not None else None
     side_b_weight = b.loading.side_weight if b is not None else a.loading.side_weight
     total = cfg.bar_weight + a.loading.side_weight + side_b_weight
     symmetric = None if b is None else abs(a.loading.side_weight - b.loading.side_weight) < 1e-6
     confidence = a.confidence if b is None else a.confidence * b.confidence
     if symmetric is False:
         reasons.append(f"Sides don't match: {a.loading.side_weight:g} vs {b.loading.side_weight:g} {cfg.unit} per side.")
-    if not a.structural:
+    if not a.structural and not a.colored:
         reasons.append("Read from lettering only: plate sizes weren't measurable.")
-    if not a.lettering:
+    if a.colored and not a.structural:
+        reasons.append("Read from rim tape colors (thickness/shape disabled).")
+    if not a.lettering and not a.colored:
         reasons.append("No lettering read: from plate sizes only.")
     if side_a.profile is not None and side_a.profile.glare_fraction > 0.05:
         reasons.append("Glare on the plates.")
     if expected_total is not None and abs(total - expected_total) > 1e-6:
         reasons.append(f"Differs from the planned {expected_total:g} {cfg.unit}.")
-    needs = confidence < th.auto_apply_confidence or symmetric is False or not (a.structural or a.lettering)
+    needs = confidence < th.auto_apply_confidence or symmetric is False or not (a.structural or a.colored or a.lettering)
     status = "asymmetric" if symmetric is False else ("ok" if not needs else "low_confidence")
     alternatives = [
         {"total": round(cfg.bar_weight + 2 * sw[0], 3), "per_side": sw[0], "probability": round(p, 3)} for sw, p in a.alternatives
@@ -209,6 +266,8 @@ def fuse(cfg: Config, side_a: SideEvidence, side_b: SideEvidence | None = None, 
         status=status,
         reasons=reasons,
         alternatives=alternatives,
+        color_bands=bands,
+        measured_stack_mm=measured_mm,
     )
 
 

@@ -12,41 +12,52 @@ runs on your phone but a lightweight status check; the vision work happens here,
    sleeve region is watched for change; once it has been still for `settle_s` (1.5 s) after movement, so you've
    stepped away and there's no blur, the sleeve is read once. If `person_entity` is "on" (you're in the rack) it
    waits until it turns off. "Read now" (button, or the phone) forces a read.
-3. **Three cues, fused.**
-   * **Plate slabs.** From above, each plate on the sleeve is a slab: its width along the sleeve is the plate's
-     thickness and its length across the sleeve is the plate's diameter. The sleeve is straightened into a strip
-     and compared against the empty-sleeve reference to get a height profile from the collar outwards.
+3. **Four cues, fused.**
+   * **Plate slabs & thickness.** From above or a 3/4 angle, each plate adds its thickness along the sleeve (and its
+     diameter across it). The sleeve is straightened into a strip and compared against the empty-bar reference to
+     measure the stack from the collar outwards — identifying plates hidden behind the outer plate. For angled 3/4
+     cameras, a 2-point calibration in the Web UI solves both perspective scale and outer-face overhang (`outer_face_mm`).
+   * **Colored rim electrical tape (optional backup or boost).** Wrap a strip of colored electrical tape around the
+     outer circumference of each plate denomination (e.g. red = 45, blue = 25, green = 10) and pick the colors right
+     off the live camera photo with the Web UI eyedropper. Every plate's colored rim stays visible along the sleeve
+     even behind the outer plate.
    * **Lettering.** White markings ("45LB", "REP FITNESS") are lifted with CLAHE and a top-hat filter, glare
      blobs are painted over, and an on-device OCR model (PP-OCR on ONNX Runtime) reads them in all four
      orientations. Only numbers that are plate weights you own count; a kg number in an lb gym is dropped.
-   * **Inventory.** Every per-side loading your plates can make (pairs only) is scored against the profile and
-     the lettering; the outermost plate's lettering counts most. The planned weight nudges ties, never more.
+   * **Inventory.** Every per-side loading your plates can make (pairs only) is scored against thickness, tape colors,
+     and lettering. The planned weight nudges ties, never overrides clear camera evidence.
    Probabilities are summed per total (45 a side and 35+10 a side both make 135), and the best total wins.
 4. **Publish.** `sensor.barbell_camera_weight` (state = total; attributes below), an annotated
    `image.barbell_camera_last_reading`, sleeve motion, and a confidence sensor. The phone decides what to do.
 
-## Install
+## Install & Setup (Web UI)
 
 **From GitHub (recommended).** Settings → Apps → App store → ⋮ → **Repositories**, add the LiftoDroid app
 repository URL (the public mirror, e.g. `https://github.com/Flexingg/liftodroid-ha-apps`; see the repository's
 `homeassistant/README.md`), then install **LiftoDroid Barbell Camera** from the store. Home Assistant builds it
 on your machine the first time (a few minutes). New versions arrive as normal app updates.
 
-**Or as a local app.** Copy the `liftodroid_barbell` folder into `/addons/` (Studio Code Server or the SSH app),
-then App store → ⋮ → **Check for updates**; it appears under *Local apps*.
-
 Then:
 
 1. It needs the Mosquitto broker app (already running if you use VisionState).
-2. In the app's **Configuration**: set `camera_url` to the camera's RTSP(S) stream (the same URL your Generic camera
-   uses), or `camera_entity` to a camera entity. Optionally `person_entity: binary_sensor.in_squat_rack_person`.
-3. Start it. On first start it automatically creates a starter `barbell.yaml` in the app's config folder (the folder
-   under `/addon_configs/` whose name ends in `liftodroid_barbell`, visible in Studio Code Server).
-4. Calibrate (below) and edit that `barbell.yaml` with your lens, sleeve, and plate measurements.
+2. In the app's **Configuration** tab: set `camera_url` (RTSP/RTSPS stream) or `camera_entity`, and optionally
+   `person_entity: binary_sensor.in_squat_rack_person`.
+3. Start the app and click **Open Web UI** (or turn on **Show in sidebar**):
+   * Click **Grab Live Frame**, then drag the yellow **ROI** box around the sleeve and drag the green **Collar (C) →
+     Tip (T)** arrow along the sleeve.
+   * Unload the bar and click **Save Empty Bar** (gives clean background subtraction for thickness and ignores
+     colored gym gear behind the bar).
+   * In **Plates & Tape Colors**, enter your plates' diameters & thicknesses (mm). Optionally assign electrical tape
+     colors (or click **Pick** to sample the tape right off the live camera frame).
+   * In **Detection & Thickness**, use **1-pt Calibrate** (overhead camera) or **Record 2-pt Sample → Solve 2-pt**
+     (angled / 3/4 camera, e.g. 135 lb then 225 lb) to lock in exact thickness scaling.
+   * In **Test & Read**, click **Grab & Test Now**, inspect the **Sleeve Strip Diagnostics** (rectified strip + green
+     plate mask + tape color bar), adjust any sliders live, then click **Save & Apply** (no restart required).
 
-## Calibrate
+## CLI Calibration (optional, for fisheye lens intrinsics & batch evaluation)
 
-Open a terminal in the app from the SSH app (protection mode off):
+For severe fisheye distortion or batch-evaluating a folder of saved frames, open a terminal in the app from the SSH
+app (protection mode off):
 `docker exec -it $(docker ps -qf name=liftodroid_barbell) bash`, then `cd /app` and use
 `/opt/venv/bin/python -m barbell.calibrate …`. Work in `/config` so files survive updates.
 

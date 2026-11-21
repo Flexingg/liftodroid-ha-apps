@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0
+
+- **Built-in Web UI (Home Assistant Ingress):** Click **Open Web UI** (or pin to sidebar) to visually drag the sleeve
+  ROI & collar-to-tip axis on a live camera frame, save the empty-bar reference, edit plates, tweak sliders, view the
+  straightened sleeve strip & plate mask diagnostics, and test reads live without editing YAML or restarting.
+- **Angled / 3/4 camera plate-thickness calibration:** Added `outer_face_mm` and a 1-point / 2-point thickness
+  calibration helper in the Web UI so total stack thickness can identify plates behind the outer one even when the
+  camera sees the outer plate face at an angle.
+- **Colored electrical tape backup (or boost):** Assign tape colors (`red`, `blue`, `yellow`, `green`, `orange`,
+  `purple`, `pink`, `white`) or sample the exact HSV right off the camera photo with the UI eyedropper to identify
+  plates by colored rim tape around their outer circumference.
+
 ## 0.1.3
 
 - Fix: a reading without a weight (e.g. only the outer plate seen) was rejected by Home Assistant, so the weight

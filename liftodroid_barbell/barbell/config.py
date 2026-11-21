@@ -13,12 +13,28 @@ Point = tuple[float, float]
 
 @dataclass(frozen=True)
 class Plate:
-    """One plate denomination you own. [count] is the total (both sides). Sizes in mm; measure your own plates."""
+    """One plate denomination you own. [count] is the total (both sides). Sizes in mm; measure your own plates.
+
+    Optional [color] is a named electrical tape color (e.g. "red", "blue", "yellow", "green", "orange", "purple",
+    "pink", "white") wrapped around the outer circumference; [color_hsv] stores a sampled (H_deg 0..360, S_pct 0..100,
+    V_pct 0..100) swatch from the camera for exact lighting calibration.
+    """
 
     weight: float
     count: int
     diameter_mm: float
     thickness_mm: float
+    color: str | None = None
+    color_hsv: tuple[float, float, float] | None = None
+
+    @property
+    def color_key(self) -> str | None:
+        """Canonical label identifying this plate's tape color, or None if uncolored."""
+        if self.color:
+            return self.color.strip().lower()
+        if self.color_hsv is not None:
+            return f"custom_{self.weight:g}"
+        return None
 
 
 @dataclass(frozen=True)
@@ -40,11 +56,13 @@ class Sleeve:
 
     axis: from the collar (where the first plate sits) to the sleeve tip.
     roi:  polygon around the sleeve and its plates (used for motion gating and OCR).
+    outer_face_mm: for angled / 3/4 cameras where the outermost plate's face projects past its rim along the axis.
     """
 
     axis: tuple[Point, Point]
     roi: tuple[Point, ...]
     sleeve_length_mm: float = 415.0
+    outer_face_mm: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -67,6 +85,12 @@ class Thresholds:
     shape_weight: float = 6.0
     # Slop allowed between the measured and predicted stack length, mm (plus 5% of the stack).
     length_tolerance_mm: float = 6.0
+    # Colored rim electrical tape detection tuning.
+    color_weight: float = 4.0
+    color_hue_tolerance: float = 22.0
+    color_min_saturation: int = 55
+    color_min_value: int = 40
+    color_min_fraction: float = 0.08
 
 
 @dataclass(frozen=True)
@@ -89,12 +113,19 @@ class Config:
     # Optional HA entity that is "on" while someone is in the rack (e.g. a VisionState person sensor):
     # readings wait until it turns off.
     person_entity: str | None = None
-    # Measure plate slabs along the sleeve. Needs a side-on view of the sleeve; turn off when the camera looks along
-    # the bar (then only lettering and the inventory decide, and the phone asks more often).
+    # Measure plate slabs / thickness along the sleeve.
     use_shape: bool = True
+    # Read colored electrical tape bands around the outer circumference of plates (when any plate has a color set).
+    use_color: bool = True
+    # Read white lettering stamped on plate faces via OCR.
+    use_ocr: bool = True
 
     def plate_by_weight(self, w: float) -> Plate | None:
         return next((p for p in self.plates if abs(p.weight - w) < 1e-6), None)
+
+    @property
+    def has_tape_colors(self) -> bool:
+        return any(p.color_key is not None for p in self.plates)
 
 
 DEFAULT_LB_PLATES = (
@@ -116,6 +147,18 @@ DEFAULT_KG_PLATES = (
     Plate(1.25, 2, 160, 15),
 )
 
+VISION_OPTION_KEYS = (
+    "unit",
+    "bar_weight",
+    "plates",
+    "sleeve_roi",
+    "sleeve_axis",
+    "sleeve_length_mm",
+    "outer_face_mm",
+    "use_shape",
+    "use_color",
+)
+
 
 def _points(v: Any) -> tuple[Point, ...]:
     return tuple((float(p[0]), float(p[1])) for p in v)
@@ -127,7 +170,20 @@ def _sleeve(v: dict | None) -> Sleeve | None:
     axis = _points(v["axis"])
     if len(axis) != 2:
         raise ValueError("sleeve.axis needs exactly two points: collar, tip")
-    return Sleeve(axis=(axis[0], axis[1]), roi=_points(v["roi"]), sleeve_length_mm=float(v.get("sleeve_length_mm", 415.0)))
+    return Sleeve(
+        axis=(axis[0], axis[1]),
+        roi=_points(v["roi"]),
+        sleeve_length_mm=float(v.get("sleeve_length_mm", 415.0)),
+        outer_face_mm=float(v.get("outer_face_mm", 0.0)),
+    )
+
+
+def _parse_hsv(v: Any) -> tuple[float, float, float] | None:
+    if not v:
+        return None
+    if len(v) != 3:
+        raise ValueError(f"color_hsv must have 3 values [H_deg, S_pct, V_pct], got {v}")
+    return (float(v[0]) % 360.0, max(0.0, min(100.0, float(v[1]))), max(0.0, min(100.0, float(v[2]))))
 
 
 def from_dict(d: dict[str, Any]) -> Config:
@@ -135,7 +191,14 @@ def from_dict(d: dict[str, Any]) -> Config:
     if unit not in ("lb", "kg"):
         raise ValueError(f"unit must be lb or kg, not {unit}")
     plates = tuple(
-        Plate(float(p["weight"]), int(p["count"]), float(p.get("diameter_mm", 0)), float(p.get("thickness_mm", 0)))
+        Plate(
+            float(p["weight"]),
+            int(p["count"]),
+            float(p.get("diameter_mm", 0)),
+            float(p.get("thickness_mm", 0)),
+            str(p["color"]).strip().lower() if p.get("color") else None,
+            _parse_hsv(p.get("color_hsv")),
+        )
         for p in d.get("plates", [])
     ) or (DEFAULT_LB_PLATES if unit == "lb" else DEFAULT_KG_PLATES)
     for p in plates:
@@ -147,7 +210,7 @@ def from_dict(d: dict[str, Any]) -> Config:
         camera_matrix=tuple(tuple(float(x) for x in row) for row in lens_d["camera_matrix"]) if lens_d.get("camera_matrix") else None,
         dist_coeffs=tuple(float(x) for x in lens_d.get("dist_coeffs", ())),
         balance=float(lens_d.get("balance", 0.0)),
-        calibrated_size=tuple(lens_d["calibrated_size"]) if lens_d.get("calibrated_size") else None,
+        calibrated_size=tuple(int(x) for x in lens_d["calibrated_size"]) if lens_d.get("calibrated_size") else None,
     )
     if lens.model not in ("none", "pinhole", "fisheye"):
         raise ValueError("lens.model must be none, pinhole or fisheye")
@@ -169,7 +232,102 @@ def from_dict(d: dict[str, Any]) -> Config:
         reference_image=d.get("reference_image"),
         person_entity=d.get("person_entity"),
         use_shape=bool(d.get("use_shape", True)),
+        use_color=bool(d.get("use_color", True)),
+        use_ocr=bool(d.get("use_ocr", True)),
     )
+
+
+def _sleeve_to_dict(s: Sleeve) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "axis": [[round(p[0], 5), round(p[1], 5)] for p in s.axis],
+        "roi": [[round(p[0], 5), round(p[1], 5)] for p in s.roi],
+        "sleeve_length_mm": round(float(s.sleeve_length_mm), 2),
+    }
+    if s.outer_face_mm:
+        out["outer_face_mm"] = round(float(s.outer_face_mm), 2)
+    return out
+
+
+def to_dict(cfg: Config) -> dict[str, Any]:
+    """Serialize [cfg] to a clean plain dict suitable for YAML or JSON (excluding camera_url secrets by default)."""
+    plates_out = []
+    for p in cfg.plates:
+        item: dict[str, Any] = {
+            "weight": p.weight,
+            "count": p.count,
+            "diameter_mm": p.diameter_mm,
+            "thickness_mm": p.thickness_mm,
+        }
+        if p.color:
+            item["color"] = p.color
+        if p.color_hsv is not None:
+            item["color_hsv"] = [round(v, 1) for v in p.color_hsv]
+        plates_out.append(item)
+
+    lens_out: dict[str, Any] = {"model": cfg.lens.model}
+    if cfg.lens.calibrated_size is not None:
+        lens_out["calibrated_size"] = list(cfg.lens.calibrated_size)
+    if cfg.lens.camera_matrix is not None:
+        lens_out["camera_matrix"] = [list(row) for row in cfg.lens.camera_matrix]
+    if cfg.lens.dist_coeffs:
+        lens_out["dist_coeffs"] = list(cfg.lens.dist_coeffs)
+    if cfg.lens.model == "fisheye" or cfg.lens.balance:
+        lens_out["balance"] = cfg.lens.balance
+
+    th = cfg.thresholds
+    out: dict[str, Any] = {
+        "unit": cfg.unit,
+        "bar_weight": cfg.bar_weight,
+        "plates": plates_out,
+        "lens": lens_out,
+        "use_shape": cfg.use_shape,
+        "use_color": cfg.use_color,
+        "use_ocr": cfg.use_ocr,
+        "analysis_fps": cfg.analysis_fps,
+        "thresholds": {
+            "motion_pixel_delta": th.motion_pixel_delta,
+            "motion_fraction": th.motion_fraction,
+            "settle_s": th.settle_s,
+            "ttl_s": th.ttl_s,
+            "auto_apply_confidence": th.auto_apply_confidence,
+            "ocr_min_score": th.ocr_min_score,
+            "plate_pixel_delta": th.plate_pixel_delta,
+            "shape_weight": th.shape_weight,
+            "length_tolerance_mm": th.length_tolerance_mm,
+            "color_weight": th.color_weight,
+            "color_hue_tolerance": th.color_hue_tolerance,
+            "color_min_saturation": th.color_min_saturation,
+            "color_min_value": th.color_min_value,
+            "color_min_fraction": th.color_min_fraction,
+        },
+    }
+    if cfg.sleeve is not None:
+        out["sleeve"] = _sleeve_to_dict(cfg.sleeve)
+    if cfg.sleeve_b is not None:
+        out["sleeve_b"] = _sleeve_to_dict(cfg.sleeve_b)
+    if cfg.storage_roi is not None:
+        out["storage_roi"] = [[round(p[0], 5), round(p[1], 5)] for p in cfg.storage_roi]
+    if cfg.bench_roi is not None:
+        out["bench_roi"] = [[round(p[0], 5), round(p[1], 5)] for p in cfg.bench_roi]
+    if cfg.reference_image:
+        out["reference_image"] = cfg.reference_image
+    if cfg.person_entity:
+        out["person_entity"] = cfg.person_entity
+    return out
+
+
+def save(cfg: Config, path: str | Path, options_snapshot: dict[str, Any] | None = None) -> None:
+    """Write [cfg] cleanly to YAML. If [options_snapshot] is given, records the current HA vision options so
+    restarts preserve Web UI edits unless the user explicitly changes an option in Home Assistant later."""
+    data = to_dict(cfg)
+    if options_snapshot is not None:
+        data["_ui_options_snapshot"] = {k: options_snapshot.get(k) for k in VISION_OPTION_KEYS if k in options_snapshot}
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+    tmp.replace(dest)
 
 
 def load(path: str | Path) -> Config:
@@ -177,8 +335,24 @@ def load(path: str | Path) -> Config:
         return from_dict(yaml.safe_load(f) or {})
 
 
+def load_with_options(path: str | Path, opts: dict[str, Any]) -> Config:
+    """Load [path] and apply Home Assistant [opts], skipping vision options that haven't changed since the user
+    last saved from the Web UI."""
+    with open(path, encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    cfg = from_dict(raw)
+    snapshot = raw.get("_ui_options_snapshot")
+    if isinstance(snapshot, dict):
+        filtered = dict(opts)
+        for k in VISION_OPTION_KEYS:
+            if k in snapshot and filtered.get(k) == snapshot.get(k):
+                filtered.pop(k, None)
+        return apply_options(cfg, filtered)
+    return apply_options(cfg, opts)
+
+
 def with_context(cfg: Config, unit: str | None, bar: float | None, plates: list[dict] | None) -> Config:
-    """The phone knows the gym's bar and plates from Liftosaur; its counts win, sizes stay from the file."""
+    """The phone knows the gym's bar and plates from Liftosaur; its counts win, sizes & tape colors stay from the file."""
     from dataclasses import replace
 
     out = cfg
@@ -191,7 +365,14 @@ def with_context(cfg: Config, unit: str | None, bar: float | None, plates: list[
         for p in plates:
             w = float(p["weight"])
             known = cfg.plate_by_weight(w)
-            merged.append(Plate(w, int(p["count"]), known.diameter_mm if known else 0.0, known.thickness_mm if known else 0.0))
+            merged.append(Plate(
+                w,
+                int(p["count"]),
+                known.diameter_mm if known else 0.0,
+                known.thickness_mm if known else 0.0,
+                known.color if known else None,
+                known.color_hsv if known else None,
+            ))
         out = replace(out, plates=tuple(merged))
     return out
 
@@ -209,17 +390,20 @@ def _parse_points(text: str) -> tuple[Point, ...]:
 
 
 def _parse_plates(text: str, unit: str) -> tuple[Plate, ...]:
-    """"45:450/76, 25:450/43, 10x4:450/25" -> weight[xcount]:diameter_mm/thickness_mm. Count defaults to 2 (one
-    pair); the phone sends the real counts from Liftosaur for every set anyway."""
+    """"45:450/76, 25:450/43:blue, 10x4:450/25:green" -> weight[xcount]:diameter_mm/thickness_mm[:color].
+    Count defaults to 2 (one pair); the phone sends the real counts from Liftosaur for every set anyway."""
     out = []
     for item in text.split(","):
         item = item.strip()
         if not item:
             continue
-        head, _, size = item.partition(":")
+        parts = item.split(":")
+        head = parts[0]
+        size = parts[1] if len(parts) > 1 else ""
+        color = parts[2].strip().lower() or None if len(parts) > 2 else None
         weight, _, count = head.lower().partition("x")
         d, _, t = size.partition("/")
-        out.append(Plate(float(weight), int(count) if count else 2, float(d) if d else 0.0, float(t) if t else 0.0))
+        out.append(Plate(float(weight), int(count) if count else 2, float(d) if d else 0.0, float(t) if t else 0.0, color))
     if not out:
         raise ValueError("plates is empty")
     return tuple(out)
@@ -243,6 +427,8 @@ def apply_options(cfg: Config, opts: dict[str, Any]) -> Config:
         out = replace(out, person_entity=str(opts["person_entity"]))
     if "use_shape" in opts and opts["use_shape"] is not None:
         out = replace(out, use_shape=bool(opts["use_shape"]))
+    if "use_color" in opts and opts["use_color"] is not None:
+        out = replace(out, use_color=bool(opts["use_color"]))
     roi_text = str(opts.get("sleeve_roi", "") or "").strip()
     axis_text = str(opts.get("sleeve_axis", "") or "").strip()
     if roi_text or axis_text:
@@ -261,7 +447,11 @@ def apply_options(cfg: Config, opts: dict[str, Any]) -> Config:
             xs, ys = [p[0] for p in roi], [p[1] for p in roi]
             axis = ((min(xs), (min(ys) + max(ys)) / 2), (max(xs), (min(ys) + max(ys)) / 2))
         length = float(opts.get("sleeve_length_mm") or (base.sleeve_length_mm if base else 415.0))
-        out = replace(out, sleeve=Sleeve(axis=(axis[0], axis[1]), roi=roi, sleeve_length_mm=length))
-    elif opts.get("sleeve_length_mm") and out.sleeve is not None:
-        out = replace(out, sleeve=replace(out.sleeve, sleeve_length_mm=float(opts["sleeve_length_mm"])))
+        face = float(opts["outer_face_mm"]) if opts.get("outer_face_mm") is not None else (base.outer_face_mm if base else 0.0)
+        out = replace(out, sleeve=Sleeve(axis=(axis[0], axis[1]), roi=roi, sleeve_length_mm=length, outer_face_mm=face))
+    elif out.sleeve is not None:
+        length = float(opts["sleeve_length_mm"]) if opts.get("sleeve_length_mm") else out.sleeve.sleeve_length_mm
+        face = float(opts["outer_face_mm"]) if opts.get("outer_face_mm") is not None else out.sleeve.outer_face_mm
+        if length != out.sleeve.sleeve_length_mm or face != out.sleeve.outer_face_mm:
+            out = replace(out, sleeve=replace(out.sleeve, sleeve_length_mm=length, outer_face_mm=face))
     return out

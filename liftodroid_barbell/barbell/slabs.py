@@ -62,13 +62,17 @@ class Profile:
 
 def plate_mask(strip: Strip, reference: Strip | None, pixel_delta: int) -> np.ndarray:
     """Pixels that belong to a plate: different from the empty sleeve if we have it, otherwise just dark."""
-    gray = cv2.cvtColor(strip.image, cv2.COLOR_BGR2GRAY) if strip.image.ndim == 3 else strip.image
     if reference is not None and reference.image.shape[:2] == strip.image.shape[:2]:
-        ref = cv2.cvtColor(reference.image, cv2.COLOR_BGR2GRAY) if reference.image.ndim == 3 else reference.image
-        diff = cv2.absdiff(cv2.GaussianBlur(gray, (5, 5), 0), cv2.GaussianBlur(ref, (5, 5), 0))
+        if strip.image.ndim == 3 and reference.image.ndim == 3:
+            diff = cv2.absdiff(cv2.GaussianBlur(strip.image, (5, 5), 0), cv2.GaussianBlur(reference.image, (5, 5), 0)).max(axis=2)
+        else:
+            gray = cv2.cvtColor(strip.image, cv2.COLOR_BGR2GRAY) if strip.image.ndim == 3 else strip.image
+            ref = cv2.cvtColor(reference.image, cv2.COLOR_BGR2GRAY) if reference.image.ndim == 3 else reference.image
+            diff = cv2.absdiff(cv2.GaussianBlur(gray, (5, 5), 0), cv2.GaussianBlur(ref, (5, 5), 0))
         mask = (diff > pixel_delta).astype(np.uint8) * 255
     else:
         # Black plates: darker than the scene around them. Otsu adapts to the light in the room.
+        gray = cv2.cvtColor(strip.image, cv2.COLOR_BGR2GRAY) if strip.image.ndim == 3 else strip.image
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         _, mask = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     # White lettering and rims leave holes in a black plate: close them, then drop specks.
@@ -94,18 +98,20 @@ def profile(strip: Strip, reference: Strip | None = None, pixel_delta: int = 35,
     h, w = mask.shape
     mm_per_px = 1.0 / strip.px_per_mm
     centre = h // 2
+    band = max(2, min(centre, int(round(strip.px_per_mm * 12))))
 
     # Plate extent per column: the run of plate pixels through the middle of the strip (where the sleeve is).
     heights = np.zeros(w, dtype=np.float32)
     cols = mask > 0
     for x in range(w):
         col = cols[:, x]
-        if not col[centre - 2:centre + 3].any():
+        hits = np.flatnonzero(col[centre - band:centre + band + 1])
+        if hits.size == 0:
             continue
-        top = centre
+        top = centre - band + int(hits[0])
         while top > 0 and col[top - 1]:
             top -= 1
-        bottom = centre
+        bottom = centre - band + int(hits[-1])
         while bottom < h - 1 and col[bottom + 1]:
             bottom += 1
         heights[x] = (bottom - top + 1) * mm_per_px

@@ -29,5 +29,8 @@ def test_version_bumps_together():
 
 def test_build_files_present():
     build = yaml.safe_load((APP / "build.yaml").read_text())
-    assert set(build["build_from"]) == set(yaml.safe_load((APP / "config.yaml").read_text())["arch"])
+    cfg = yaml.safe_load((APP / "config.yaml").read_text())
+    assert set(build["build_from"]) == set(cfg["arch"])
     assert (APP / "Dockerfile").exists() and (APP / "requirements.txt").exists()
+    assert cfg.get("ingress") is True and cfg.get("ingress_port") == 8099
+    assert (APP / "barbell" / "web_ui.html").exists()
