@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field
 import numpy as np
 
 from .config import Config
-from .inventory import Loading, side_loadings, stack_thickness_mm
+from .inventory import Loading, planned_loading, side_loadings, stack_thickness_mm
 from .ocr import Denomination
 from .slabs import Profile
 
@@ -104,6 +104,12 @@ def structural_log_likelihood(cfg: Config, loading: Loading, prof: Profile) -> f
 
 def lettering_log_likelihood(loading: Loading, side: SideEvidence) -> float:
     ll = 0.0
+    if side.profile is None and side.denominations:
+        # No side view of the sleeve: the camera faces the plates, so the clearest lettering is on the OUTER plate
+        # (bumpers hide everything behind it). A loading whose outer plate is something else can't explain it.
+        best = max(side.denominations, key=lambda dp: dp[0].score)[0]
+        if loading.outermost is None or abs(loading.outermost - best.weight) > 1e-6:
+            ll += best.score * math.log(0.05)
     for d, pos_mm in side.denominations:
         present = loading.count(d.weight) > 0
         ll += d.score * (math.log(0.9) if present else math.log(0.08))
@@ -168,6 +174,8 @@ def fuse(cfg: Config, side_a: SideEvidence, side_b: SideEvidence | None = None, 
         ]
     if a is None:
         return Reading(None, cfg.unit, 0.0, [], None, None, raw, True, "no_evidence", ["The sleeve couldn't be read: nothing to go on."])
+    if side_a.profile is None and side_a.denominations:
+        return _outer_plate_only(cfg, side_a, expected_total, raw)
     reasons: list[str] = []
     b = score_side(cfg, side_b, expected_side) if side_b is not None else None
     side_b_weight = b.loading.side_weight if b is not None else a.loading.side_weight
@@ -202,3 +210,26 @@ def fuse(cfg: Config, side_a: SideEvidence, side_b: SideEvidence | None = None, 
         reasons=reasons,
         alternatives=alternatives,
     )
+
+
+def _outer_plate_only(cfg: Config, side: SideEvidence, expected_total: float | None, raw: list[dict]) -> Reading:
+    """Lettering without a side view: the camera knows the OUTER plate and nothing behind it. Say exactly that.
+    Consistent with the plan -> the plan's weight, flagged as such; inconsistent -> no weight, and why."""
+    best = max(side.denominations, key=lambda dp: dp[0].score)[0]
+    u = cfg.unit
+    if expected_total is None:
+        return Reading(None, u, 0.0, [], None, None, raw, True, "outer_plate_only",
+                       [f"Outer plate reads {best.weight:g} {u}; the plates behind it can't be seen."])
+    plan = planned_loading(cfg, expected_total)
+    match = plan if plan is not None and plan.outermost is not None and abs(plan.outermost - best.weight) < 1e-6 else None
+    if match is not None:
+        return Reading(
+            round(expected_total, 3), u, round(min(0.95, best.score), 3), list(match.plates), None, None, raw, False, "ok",
+            [f"Outer plate reads {best.weight:g} {u}, as planned. The plates behind it can't be seen from this camera."],
+        )
+    plan_outer = plan.outermost if plan is not None else None
+    why = f"Outer plate reads {best.weight:g} {u}" + (
+        f", but the plan's outer plate is {plan_outer:g} {u}." if plan_outer is not None else
+        f", which doesn't fit {expected_total:g} {u} with your plates."
+    )
+    return Reading(None, u, 0.0, [], None, None, raw, True, "outer_plate_mismatch", [why])

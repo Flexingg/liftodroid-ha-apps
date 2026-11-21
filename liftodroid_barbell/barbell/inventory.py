@@ -59,3 +59,17 @@ def is_loadable(cfg: Config, total: float) -> bool:
 
 def stack_thickness_mm(cfg: Config, loading: Loading) -> float:
     return sum((cfg.plate_by_weight(w).thickness_mm if cfg.plate_by_weight(w) else 0.0) for w in loading.plates)
+
+
+def planned_loading(cfg: Config, total: float) -> Loading | None:
+    """How the bar is actually loaded for [total]: heaviest plates first, within what you own (the same rule
+    Liftosaur's plate calculator uses). None if the plates can't make it exactly."""
+    remaining = (total - cfg.bar_weight) / 2
+    if remaining < -1e-6:
+        return None
+    side: list[float] = []
+    for p in sorted((p for p in cfg.plates if p.count >= 2), key=lambda p: -p.weight):
+        n = min(p.count // 2, int((remaining + 1e-6) // p.weight))
+        side.extend([p.weight] * n)
+        remaining -= n * p.weight
+    return Loading(tuple(side)) if abs(remaining) < 1e-6 else None

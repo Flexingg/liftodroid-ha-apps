@@ -30,7 +30,7 @@ import cv2
 import numpy as np
 
 from . import __version__
-from .config import Config, load, with_context
+from .config import Config, apply_options, load, with_context
 from .geometry import polygon_mask
 from .motion import GateEvent, MotionGate
 from .pipeline import Analyzer
@@ -94,6 +94,10 @@ def discovery(prefix: str, unit: str = "lb") -> list[tuple[str, dict]]:
             "name": "Read now", "unique_id": f"{NODE}_detect", "command_topic": f"{BASE}/cmd/detect",
             "icon": "mdi:camera-iris", "device": dev, **avail,
         }),
+        (f"{prefix}/button/{NODE}/reference/config", {
+            "name": "Save empty bar", "unique_id": f"{NODE}_reference", "command_topic": f"{BASE}/cmd/reference",
+            "icon": "mdi:camera-plus", "entity_category": "config", "device": dev, **avail,
+        }),
         (f"{prefix}/switch/{NODE}/enabled/config", {
             "name": "Enabled", "unique_id": f"{NODE}_enabled", "command_topic": f"{BASE}/cmd/enabled",
             "state_topic": f"{BASE}/enabled", "entity_category": "config", "device": dev, **avail,
@@ -152,19 +156,28 @@ class RtspCapture:
 class SnapshotCapture:
     """Fallback: Home Assistant's camera proxy for a camera entity (slower; fine at 1-2 fps)."""
 
-    def __init__(self, entity_id: str, core: "CoreApi"):
+    def __init__(self, entity_id: str, core: "CoreApi", min_interval_s: float = 0.5, clock: Callable[[], float] = time.time):
         self.entity_id = entity_id
         self.core = core
+        self.min_interval_s = min_interval_s
+        self.clock = clock
+        self._last: tuple[float, np.ndarray] | None = None
+        self._fetched_at = float("-inf")
 
     def open(self) -> None:
         pass
 
     def latest(self) -> tuple[float, np.ndarray] | None:
+        # The worker asks every ~50 ms; Home Assistant is asked at most once per analysis interval.
+        now = self.clock()
+        if now - self._fetched_at < self.min_interval_s:
+            return self._last
+        self._fetched_at = now
         data = self.core.get_bytes(f"/camera_proxy/{self.entity_id}")
-        if not data:
-            return None
-        img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
-        return (time.time(), img) if img is not None else None
+        img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR) if data else None
+        if img is not None:
+            self._last = (now, img)
+        return self._last
 
     def close(self) -> None:
         pass
@@ -174,7 +187,7 @@ class CoreApi:
     """Home Assistant's REST API through the Supervisor (the app token needs no user setup)."""
 
     def __init__(self, token: str | None = None, base: str = "http://supervisor/core/api"):
-        self.token = token or os.environ.get("SUPERVISOR_TOKEN", "")
+        self.token = token or supervisor_token() or ""
         self.base = base
 
     def _req(self, path: str) -> bytes | None:
@@ -196,8 +209,20 @@ class CoreApi:
         return json.loads(raw).get("state") if raw else None
 
 
-def supervisor_mqtt() -> dict[str, Any] | None:
+def supervisor_token(env_dir: str = "/run/s6/container_environment") -> str | None:
+    """The app's Supervisor token. s6-overlay doesn't always pass the container's environment to the main process,
+    so fall back to the copy it keeps on disk."""
     token = os.environ.get("SUPERVISOR_TOKEN")
+    if token:
+        return token
+    try:
+        return (Path(env_dir) / "SUPERVISOR_TOKEN").read_text().strip() or None
+    except OSError:
+        return None
+
+
+def supervisor_mqtt() -> dict[str, Any] | None:
+    token = supervisor_token()
     if not token:
         return None
     req = urllib.request.Request("http://supervisor/services/mqtt", headers={"Authorization": f"Bearer {token}"})
@@ -229,6 +254,7 @@ class Worker:
         self._pending = False
         self._last_analysis = 0.0
         self._mask = None
+        self._want_reference = False
 
     # Commands arrive on the MQTT thread; the loop reads these flags.
     def on_command(self, topic: str, payload: bytes) -> None:
@@ -247,6 +273,11 @@ class Worker:
             self.arm.disarm()
         elif name == "detect":
             self.gate.force()
+            if not self.arm.armed(now):
+                self.arm.arm({"ttl_s": 60, **self.arm.context}, now)
+        elif name == "reference":
+            # Unload the bar, then press "Save empty bar": the next frame becomes the empty-sleeve reference.
+            self._want_reference = True
             if not self.arm.armed(now):
                 self.arm.arm({"ttl_s": 60, **self.arm.context}, now)
         elif name == "enabled":
@@ -272,6 +303,10 @@ class Worker:
         if got is None:
             return
         t, frame = got
+        if self._want_reference:
+            self._want_reference = False
+            self.save_reference(frame)
+            return
         if t - self._last_analysis < 1.0 / max(self.cfg.analysis_fps, 0.1):
             return
         self._last_analysis = t
@@ -291,6 +326,17 @@ class Worker:
                 return  # someone is in the rack: wait until they step out
             self._pending = False
             self.read(frame, t)
+
+    def save_reference(self, frame: np.ndarray) -> None:
+        und = self.analyzer.undistort(frame)
+        path = self.cfg.reference_image or "/config/reference.png"
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(path, und)
+        except OSError as e:
+            LOG.warning("Couldn't save the reference to %s: %s", path, e)
+        self.analyzer.reference = und
+        LOG.info("Saved the empty-bar reference (%s)", path)
 
     def read(self, frame: np.ndarray, t: float) -> None:
         ctx = self.arm.context
@@ -327,11 +373,11 @@ def main() -> None:
     cfg_path = opts.get("config_file", "/config/barbell.yaml")
     if ensure_config_file(cfg_path):
         LOG.info("Created default %s from barbell.example.yaml; edit it to calibrate your camera, sleeve, and plates (see the Documentation tab).", cfg_path)
-    cfg = load(cfg_path)
-    if opts.get("camera_url"):
-        cfg = replace(cfg, camera_url=opts["camera_url"])
-    if opts.get("person_entity"):
-        cfg = replace(cfg, person_entity=opts["person_entity"])
+    cfg = apply_options(load(cfg_path), opts)
+    if cfg.sleeve is None:
+        LOG.error("No sleeve set: fill in sleeve_roi in the app's Configuration tab (or barbell.yaml), then restart.")
+        while True:
+            time.sleep(3600)
     reference = cv2.imread(cfg.reference_image) if cfg.reference_image and os.path.exists(cfg.reference_image) else None
     reader = None
     try:
@@ -345,12 +391,16 @@ def main() -> None:
     camera_entity = opts.get("camera_entity")
     if not cfg.camera_url and not camera_entity:
         LOG.warning("No camera_url or camera_entity configured yet; set one in the app's Configuration tab.")
-    factory = (lambda: RtspCapture(cfg.camera_url)) if cfg.camera_url else (lambda: SnapshotCapture(camera_entity, core))
+    factory = (lambda: RtspCapture(cfg.camera_url)) if cfg.camera_url else (lambda: SnapshotCapture(camera_entity, core, min_interval_s=1.0 / max(cfg.analysis_fps, 0.1)))
 
-    m = opts.get("mqtt_host") and {"host": opts["mqtt_host"], "port": opts.get("mqtt_port", 1883),
-                                   "username": opts.get("mqtt_username"), "password": opts.get("mqtt_password")} or supervisor_mqtt()
-    if not m:
-        raise SystemExit("No MQTT broker: install the Mosquitto broker app or set mqtt_host")
+    while True:
+        m = opts.get("mqtt_host") and {"host": opts["mqtt_host"], "port": opts.get("mqtt_port", 1883),
+                                       "username": opts.get("mqtt_username"), "password": opts.get("mqtt_password")} or supervisor_mqtt()
+        if m:
+            break
+        # Don't exit: the watchdog would restart us in a loop and the app would show as failed.
+        LOG.error("No MQTT broker found (is the Mosquitto broker app running?). Trying again in 30 s.")
+        time.sleep(30)
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=NODE)
     if m.get("username"):
         client.username_pw_set(m["username"], m.get("password"))

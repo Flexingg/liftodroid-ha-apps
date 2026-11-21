@@ -89,6 +89,9 @@ class Config:
     # Optional HA entity that is "on" while someone is in the rack (e.g. a VisionState person sensor):
     # readings wait until it turns off.
     person_entity: str | None = None
+    # Measure plate slabs along the sleeve. Needs a side-on view of the sleeve; turn off when the camera looks along
+    # the bar (then only lettering and the inventory decide, and the phone asks more often).
+    use_shape: bool = True
 
     def plate_by_weight(self, w: float) -> Plate | None:
         return next((p for p in self.plates if abs(p.weight - w) < 1e-6), None)
@@ -165,6 +168,7 @@ def from_dict(d: dict[str, Any]) -> Config:
         analysis_fps=float(d.get("analysis_fps", 2.0)),
         reference_image=d.get("reference_image"),
         person_entity=d.get("person_entity"),
+        use_shape=bool(d.get("use_shape", True)),
     )
 
 
@@ -189,4 +193,75 @@ def with_context(cfg: Config, unit: str | None, bar: float | None, plates: list[
             known = cfg.plate_by_weight(w)
             merged.append(Plate(w, int(p["count"]), known.diameter_mm if known else 0.0, known.thickness_mm if known else 0.0))
         out = replace(out, plates=tuple(merged))
+    return out
+
+
+def _parse_points(text: str) -> tuple[Point, ...]:
+    """"0.19,0.10 0.41,0.10 0.41,0.46" -> ((0.19, 0.10), ...). Spaces or semicolons between points."""
+    pts = []
+    for tok in text.replace(";", " ").split():
+        x, y = tok.split(",")
+        px, py = float(x), float(y)
+        if not (0.0 <= px <= 1.0 and 0.0 <= py <= 1.0):
+            raise ValueError(f"point {tok} is outside the frame: use fractions 0..1")
+        pts.append((px, py))
+    return tuple(pts)
+
+
+def _parse_plates(text: str, unit: str) -> tuple[Plate, ...]:
+    """"45:450/76, 25:450/43, 10x4:450/25" -> weight[xcount]:diameter_mm/thickness_mm. Count defaults to 2 (one
+    pair); the phone sends the real counts from Liftosaur for every set anyway."""
+    out = []
+    for item in text.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        head, _, size = item.partition(":")
+        weight, _, count = head.lower().partition("x")
+        d, _, t = size.partition("/")
+        out.append(Plate(float(weight), int(count) if count else 2, float(d) if d else 0.0, float(t) if t else 0.0))
+    if not out:
+        raise ValueError("plates is empty")
+    return tuple(out)
+
+
+def apply_options(cfg: Config, opts: dict[str, Any]) -> Config:
+    """The app's Configuration tab overrides barbell.yaml, so everything a setup needs can be set from Home Assistant
+    (and remotely) without editing files. Empty options leave the file's value alone."""
+    from dataclasses import replace
+
+    out = cfg
+    if opts.get("unit") in ("lb", "kg"):
+        out = replace(out, unit=opts["unit"])
+    if opts.get("bar_weight"):
+        out = replace(out, bar_weight=float(opts["bar_weight"]))
+    if str(opts.get("plates", "")).strip():
+        out = replace(out, plates=_parse_plates(str(opts["plates"]), out.unit))
+    if opts.get("camera_url"):
+        out = replace(out, camera_url=str(opts["camera_url"]))
+    if opts.get("person_entity"):
+        out = replace(out, person_entity=str(opts["person_entity"]))
+    if "use_shape" in opts and opts["use_shape"] is not None:
+        out = replace(out, use_shape=bool(opts["use_shape"]))
+    roi_text = str(opts.get("sleeve_roi", "") or "").strip()
+    axis_text = str(opts.get("sleeve_axis", "") or "").strip()
+    if roi_text or axis_text:
+        base = out.sleeve
+        roi = _parse_points(roi_text) if roi_text else (base.roi if base else None)
+        if roi is None or len(roi) < 3:
+            raise ValueError("sleeve_roi needs at least three points")
+        if axis_text:
+            axis = _parse_points(axis_text)
+            if len(axis) != 2:
+                raise ValueError("sleeve_axis needs exactly two points: collar, tip")
+        elif base is not None:
+            axis = base.axis
+        else:
+            # No axis: across the middle of the region (only matters when use_shape is on).
+            xs, ys = [p[0] for p in roi], [p[1] for p in roi]
+            axis = ((min(xs), (min(ys) + max(ys)) / 2), (max(xs), (min(ys) + max(ys)) / 2))
+        length = float(opts.get("sleeve_length_mm") or (base.sleeve_length_mm if base else 415.0))
+        out = replace(out, sleeve=Sleeve(axis=(axis[0], axis[1]), roi=roi, sleeve_length_mm=length))
+    elif opts.get("sleeve_length_mm") and out.sleeve is not None:
+        out = replace(out, sleeve=replace(out.sleeve, sleeve_length_mm=float(opts["sleeve_length_mm"])))
     return out

@@ -1,5 +1,5 @@
 name: LiftoDroid Barbell Camera
-version: "0.1.1"
+version: "0.1.2"
 slug: liftodroid_barbell
 description: Reads the weight on your barbell from an overhead gym camera, for LiftoDroid
 url: https://github.com/Flexingg/Liftodroid
@@ -28,6 +28,18 @@ schema:
   camera_entity: str?
   # Optional: an entity that is "on" while someone is in the rack (e.g. a VisionState person sensor).
   person_entity: str?
+  # Setup that overrides barbell.yaml, so the app can be configured entirely from here (see Documentation).
+  unit: list(lb|kg)?
+  bar_weight: float?
+  # weight[xcount]:diameter_mm/thickness_mm, comma separated, e.g. "45:450/76, 25:450/43, 10:450/25"
+  plates: str?
+  # Fractions of the (undistorted) frame: "x,y x,y x,y x,y" around the sleeve and its plates
+  sleeve_roi: str?
+  # "x,y x,y": collar, then sleeve tip (only used when use_shape is on)
+  sleeve_axis: str?
+  sleeve_length_mm: float?
+  # Measure plate slabs along the sleeve (needs a side-on view of it)
+  use_shape: bool?
   discovery_prefix: str
   mqtt_host: str?
   mqtt_port: port?

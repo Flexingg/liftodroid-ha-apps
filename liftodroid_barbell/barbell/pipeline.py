@@ -53,7 +53,8 @@ class Analyzer:
                 xs, ys = strip.to_strip @ np.array([d.centre[0], d.centre[1], 1.0], dtype=np.float32)
                 on_sleeve = 0 <= xs <= strip.length and 0 <= ys <= strip.image.shape[0]
                 dens.append((d, float(xs) / strip.px_per_mm if on_sleeve else None))
-        return SideEvidence(prof if prof.seen_any or prof.valid.any() else None, tuple(dens)), strip, prof
+        use = self.cfg.use_shape and (prof.seen_any or prof.valid.any())
+        return SideEvidence(prof if use else None, tuple(dens)), strip, (prof if self.cfg.use_shape else None)
 
     def analyze(self, frame: np.ndarray, expected_total: float | None = None) -> Analysis:
         und = self.undistort(frame)

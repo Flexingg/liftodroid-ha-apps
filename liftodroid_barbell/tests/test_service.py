@@ -170,3 +170,53 @@ def test_ensure_config_file_creates_default_once(tmp_path):
     dest.write_text("unit: kg\n")
     assert ensure_config_file(dest) is False
     assert dest.read_text() == "unit: kg\n"
+
+
+def test_token_falls_back_to_the_s6_environment(tmp_path, monkeypatch):
+    from barbell.service import supervisor_token
+
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    assert supervisor_token(str(tmp_path)) is None
+    (tmp_path / "SUPERVISOR_TOKEN").write_text("abc123\n")
+    assert supervisor_token(str(tmp_path)) == "abc123"
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "from-env")
+    assert supervisor_token(str(tmp_path)) == "from-env"
+
+
+def test_save_empty_bar_makes_the_next_frame_the_reference(tmp_path):
+    from dataclasses import replace
+
+    cfg = replace(synth.config(), reference_image=str(tmp_path / "ref.png"))
+    empty = synth.scene(cfg, [])
+    cap = FakeCapture(lambda t: empty)
+    clock = {"t": 0.0}
+    pub = []
+    w = Worker(cfg, Analyzer(cfg), lambda: cap, FakeCore(), lambda t, p, r: pub.append((t, p)), clock=lambda: clock["t"])
+    w.on_command(f"{BASE}/cmd/reference", b"")
+    run(w, cap, clock, 1)
+    assert (tmp_path / "ref.png").exists()
+    assert w.analyzer.reference is not None
+    # With the reference in place, a loaded bar reads (and the empty frame itself isn't published as a reading).
+    assert states(pub) == []
+    assert "homeassistant/button/liftodroid_barbell/reference/config" in dict(discovery("homeassistant"))
+
+
+def test_snapshot_mode_asks_home_assistant_at_most_once_per_interval():
+    import cv2
+
+    from barbell.service import SnapshotCapture
+
+    ok, jpg = cv2.imencode(".jpg", synth.scene(synth.config(), [45]))
+    calls = []
+
+    class Core:
+        def get_bytes(self, path):
+            calls.append(path)
+            return jpg.tobytes()
+
+    now = {"t": 0.0}
+    cap = SnapshotCapture("camera.gym", Core(), min_interval_s=0.5, clock=lambda: now["t"])
+    for _ in range(20):  # one second of 50 ms loop ticks
+        assert cap.latest() is not None
+        now["t"] += 0.05
+    assert calls == ["/camera_proxy/camera.gym"] * 2
