@@ -1,0 +1,11 @@
+numpy>=1.26,<3
+opencv-python-headless>=4.9,<5
+paho-mqtt>=2.0,<3
+PyYAML>=6.0
+# OCR (PP-OCR models on ONNX Runtime, CPU). rapidocr itself is installed with --no-deps in the Dockerfile so it
+# doesn't pull the GUI build of OpenCV next to the headless one.
+onnxruntime>=1.17
+pyclipper>=1.3
+shapely>=2.0
+Pillow>=10
+six

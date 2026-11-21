@@ -1,0 +1,35 @@
+name: LiftoDroid Barbell Camera
+version: "0.1.0"
+slug: liftodroid_barbell
+description: Reads the weight on your barbell from an overhead gym camera, for LiftoDroid
+url: https://github.com/Flexingg/Liftodroid
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+services:
+  - mqtt:want
+hassio_api: true
+homeassistant_api: true
+map:
+  - addon_config:rw
+options:
+  log_level: info
+  config_file: /config/barbell.yaml
+  discovery_prefix: homeassistant
+schema:
+  log_level: list(debug|info|warning|error)
+  config_file: str
+  # RTSP(S) URL of the overhead camera. Holds credentials, so it's a password field.
+  camera_url: password?
+  # Or, without a stream URL: a camera entity to take snapshots from (slower).
+  camera_entity: str?
+  # Optional: an entity that is "on" while someone is in the rack (e.g. a VisionState person sensor).
+  person_entity: str?
+  discovery_prefix: str
+  mqtt_host: str?
+  mqtt_port: port?
+  mqtt_username: str?
+  mqtt_password: password?

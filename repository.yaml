@@ -1,0 +1,4 @@
+# Root of the public Home Assistant app repository that .github/workflows/publish-ha-app.yml keeps in sync.
+name: LiftoDroid
+url: https://github.com/Flexingg/liftodroid-ha-apps
+maintainer: Flexingg
