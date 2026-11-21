@@ -220,3 +220,14 @@ def test_snapshot_mode_asks_home_assistant_at_most_once_per_interval():
         assert cap.latest() is not None
         now["t"] += 0.05
     assert calls == ["/camera_proxy/camera.gym"] * 2
+
+
+def test_weight_sensor_template_reports_unknown_the_way_home_assistant_accepts():
+    import jinja2
+
+    tpl = dict(discovery("homeassistant"))["homeassistant/sensor/liftodroid_barbell/weight/config"]["value_template"]
+    env = jinja2.Environment()
+    render = lambda w: env.from_string(tpl).render(value_json={"detected_weight": w})  # noqa: E731
+    assert render(225.0) == "225.0"
+    # Home Assistant's MQTT sensor treats the rendered text "None" as unknown; "unknown" on a weight sensor is an error.
+    assert render(None) == "None"

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Fix: a reading without a weight (e.g. only the outer plate seen) was rejected by Home Assistant, so the weight
+  sensor and its attributes never updated. The sensor now goes to "unknown" and keeps every attribute.
+
 ## 0.1.2
 
 - Fix: the app couldn't find the MQTT broker (and Home Assistant's API) because the Supervisor token wasn't passed

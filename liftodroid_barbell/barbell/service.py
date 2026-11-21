@@ -69,7 +69,9 @@ def discovery(prefix: str, unit: str = "lb") -> list[tuple[str, dict]]:
     return [
         (f"{prefix}/sensor/{NODE}/weight/config", {
             "name": "Weight", "unique_id": f"{NODE}_weight", "state_topic": f"{BASE}/state",
-            "value_template": "{{ value_json.detected_weight if value_json.detected_weight is not none else 'unknown' }}",
+            # "None" is how an MQTT sensor is told "unknown"; any other text on a weight sensor makes Home Assistant
+            # drop the whole update, attributes included.
+            "value_template": "{{ value_json.detected_weight if value_json.detected_weight is not none else None }}",
             "json_attributes_topic": f"{BASE}/state", "unit_of_measurement": unit, "device_class": "weight",
             "icon": "mdi:weight-lifter", "device": dev, **avail,
         }),

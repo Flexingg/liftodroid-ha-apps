@@ -1,2 +1,3 @@
 -r requirements.txt
 pytest>=8
+jinja2  # renders the discovery templates in tests, as Home Assistant would
