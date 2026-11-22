@@ -67,4 +67,4 @@ thresholds:
   color_hue_tolerance: 22.0
   color_min_saturation: 55
   color_min_value: 40
-  color_min_fraction: 0.08
+  color_min_fraction: 0.10

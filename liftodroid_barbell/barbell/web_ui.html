@@ -437,7 +437,7 @@
           <input type="range" id="slHueTol" min="8" max="45" step="1" oninput="onSlider('color_hue_tolerance', this.value, 'valHueTol', parseFloat)">
         </div>
         <div class="slider-row">
-          <div class="slider-head"><span>Tape min saturation (0–255)</span><span id="valMinSat">55</span></div>
+          <div class="slider-head"><span>Tape color strength (higher ignores shadows/rubber)</span><span id="valMinSat">55</span></div>
           <input type="range" id="slMinSat" min="20" max="150" step="5" oninput="onSlider('color_min_saturation', this.value, 'valMinSat', parseInt)">
         </div>
         <div class="slider-row">
@@ -467,7 +467,7 @@
         </div>
 
         <p class="muted" style="margin:0 0 8px">
-          Measure each plate's diameter &amp; thickness in mm. To use electrical tape as a backup or boost, choose a tape color or click <strong>Pick</strong> to sample the tape right off the camera photo.
+          Measure each plate's diameter &amp; thickness in mm. To use electrical tape as a backup or boost, choose a chromatic color (<strong>red, blue, green, yellow, orange, purple, pink</strong>) or click <strong>Pick</strong> to sample it off the live photo. <em>Avoid white tape</em> — glare, chrome sleeves, and white plate lettering look like white.
         </p>
 
         <div style="overflow-x:auto">

@@ -90,7 +90,7 @@ class Thresholds:
     color_hue_tolerance: float = 22.0
     color_min_saturation: int = 55
     color_min_value: int = 40
-    color_min_fraction: float = 0.08
+    color_min_fraction: float = 0.10
 
 
 @dataclass(frozen=True)

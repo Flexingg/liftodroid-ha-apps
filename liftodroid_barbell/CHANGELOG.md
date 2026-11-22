@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1
+
+- **Lighting-invariant tape colors:** Switched rim tape detection to per-frame auto-white-balanced CIE L\*a\*b\*
+  chromaticity sampled in the central sleeve band so colors stay accurate across lights on/off, auto-exposure shifts,
+  and overhead glare, and prevented glare/chrome/white lettering from false-triggering `white` tape.
+- **Exposure-normalized plate mask:** Automatically normalizes empty-bar reference exposure to the live frame before
+  subtracting background so brightness shifts no longer turn the wall green.
+- **Collar offset & gap bridging:** Plate stack detection now finds the plate start up to ~130 mm past the collar
+  marker (fixing `Measured 0 mm` when `C` is placed on the J-cup or the bar shifts sideways in the rack) and bridges
+  interior plate gaps from lettering or black-on-black overlap.
+
 ## 0.2.0
 
 - **Built-in Web UI (Home Assistant Ingress):** Click **Open Web UI** (or pin to sidebar) to visually drag the sleeve

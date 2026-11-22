@@ -144,7 +144,7 @@ def diagnostic_strip(analysis: Analysis, cfg: Config) -> np.ndarray | None:
                 cv2.putText(ruler, f"{mm}", (x + 2, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220, 220, 220), 1, cv2.LINE_AA)
         mm += 25
 
-    # Plate mask overlay (green tint over pixels classified as plate, cyan vertical line at measured stack end).
+    # Plate mask overlay (green tint over pixels classified as plate, cyan vertical lines at measured stack [start..end]).
     prof = analysis.raw_profile_a or analysis.profile_a
     mask_panel = top.copy()
     if prof is not None:
@@ -152,9 +152,13 @@ def diagnostic_strip(analysis: Analysis, cfg: Config) -> np.ndarray | None:
         tint = mask_panel.copy()
         tint[mask_r] = (60, 210, 90)
         mask_panel = cv2.addWeighted(mask_panel, 0.55, tint, 0.45, 0)
-        end_x = int(round((prof.stack_length_mm * strip.px_per_mm) * scale))
-        if 0 < end_x < target_w:
-            cv2.line(mask_panel, (end_x, 0), (end_x, disp_h - 1), (0, 255, 255), 2)
+        start_x = int(round((prof.start_mm * strip.px_per_mm) * scale))
+        end_x = int(round((prof.end_mm * strip.px_per_mm) * scale))
+        if prof.stack_length_mm > 0:
+            if 0 < start_x < target_w:
+                cv2.line(mask_panel, (start_x, 0), (start_x, disp_h - 1), (255, 255, 0), 2)
+            if 0 < end_x < target_w:
+                cv2.line(mask_panel, (end_x, 0), (end_x, disp_h - 1), (0, 255, 255), 2)
         cv2.putText(mask_panel, f"Plate mask (stack: {prof.stack_length_mm:.0f} mm)", (8, 18),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(mask_panel, f"Plate mask (stack: {prof.stack_length_mm:.0f} mm)", (8, 18),

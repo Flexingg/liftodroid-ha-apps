@@ -145,3 +145,48 @@ def test_angled_camera_thickness_with_outer_face_overhang(side, total):
     assert a.reading.detected_weight == total, (a.reading, a.raw_profile_a.stack_length_mm)
     assert a.reading.per_side_breakdown == side
     assert a.reading.confidence >= 0.8
+
+
+def test_exposure_shift_between_reference_and_live_frame_keeps_mask_clean():
+    """Turning garage lights on/off shifts background brightness; exposure normalization prevents false green wall."""
+    cfg = synth.config()
+    ref = synth.scene(cfg, [], floor=110)
+    # Live frame is 1.45x brighter (garage light turned on / auto-exposure jumped).
+    loaded = np.clip(synth.scene(cfg, [45, 25], floor=110).astype(np.float32) * 1.45, 0, 255).astype(np.uint8)
+    a = Analyzer(cfg, reference=ref).analyze(loaded)
+    assert a.reading.detected_weight == 185, (a.reading, a.profile_a.stack_length_mm)
+    assert a.reading.per_side_breakdown == [45, 25]
+
+
+def test_collar_offset_does_not_zero_out_stack_length():
+    """If Collar (C) is placed ~50mm inside the first plate (e.g. on the J-cup), thickness still reads accurately."""
+    cfg = synth.config()
+    shifted_collar = (synth.COLLAR[0] + int(50 * synth.PX_PER_MM), synth.COLLAR[1])
+    ref = synth.scene(cfg, [])
+    frame = synth.scene(cfg, [45, 25], collar=shifted_collar)
+    a = Analyzer(cfg, reference=ref).analyze(frame)
+    assert a.profile_a.start_mm >= 40.0
+    assert a.reading.detected_weight == 185, (a.reading, a.profile_a.start_mm, a.profile_a.stack_length_mm)
+    assert a.reading.per_side_breakdown == [45, 25]
+
+
+def test_tape_colors_survive_warm_and_glare_lighting_without_false_white():
+    """Tape colors stay readable under dark, warm-LED, and glare-desaturated lighting without false white bands."""
+    plates = bumper_plates_with_tape() + (Plate(5, 2, 230, 20, color="white"),)
+    cfg = replace(synth.config(), plates=plates, use_shape=False, use_color=True)
+    ref = tape_scene(cfg, [])
+    base = tape_scene(cfg, [45, 25], tape_width_mm=19.0)
+
+    # 1. Dim dark garage lighting (0.55x)
+    dark = np.clip(base.astype(np.float32) * 0.55, 0, 255).astype(np.uint8)
+    r_dark = Analyzer(cfg, reference=ref).analyze(dark).reading
+    assert r_dark.detected_weight == 185, r_dark
+
+    # 2. Warm yellow LED color-temperature shift + glare washout (+50 additive haze)
+    glare_warm = base.astype(np.float32) * np.array([0.85, 1.0, 1.12]) + 50.0
+    glare_warm = np.clip(glare_warm, 0, 255).astype(np.uint8)
+    a_glare = Analyzer(cfg, reference=ref).analyze(glare_warm)
+    assert a_glare.colors_a.count_by_color["red"] == 1
+    assert a_glare.colors_a.count_by_color["blue"] == 1
+    assert a_glare.colors_a.count_by_color["white"] == 0
+    assert a_glare.reading.detected_weight == 185, a_glare.reading
