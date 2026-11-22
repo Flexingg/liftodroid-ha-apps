@@ -300,44 +300,47 @@ def detect_colors(strip: Strip, plates: Iterable[Plate], reference: Strip | None
     if not specs or strip.image.ndim != 3:
         return None
     h, w = strip.image.shape[:2]
-    # Focus white-balancing and column aggregation on the central vertical band (middle 48% of strip height) where
-    # curved 3/4 arcs are nearly vertical and top/bottom glare, scissors, bench, and rack clutter are excluded.
-    y0 = int(round(h * 0.26))
-    y1 = max(y0 + 1, int(round(h * 0.74)))
-    band_slice = slice(y0, y1)
+    # Split the central plate region into upper & lower halves around the sleeve centerline (24%..76% of strip height).
+    # Excludes the outer top/bottom tangent tails where curved 3/4 plate arcs stretch horizontally, while taking the
+    # stronger half per column so one-sided ceiling glare on the rim doesn't wash out the tape color.
+    y_top = int(round(h * 0.24))
+    y_bot = max(y_top + 2, int(round(h * 0.76)))
+    y_mid_lo = max(y_top + 1, int(round(h * 0.52)))
+    y_mid_hi = min(y_bot - 1, int(round(h * 0.48)))
+    wb_slice = slice(y_top, y_bot)
 
     blur = cv2.GaussianBlur(strip.image, (3, 3), 0)
-    l_ch, cur_a, cur_b, chroma, angle = _white_balanced_lab(blur, roi_slice=band_slice)
+    l_ch, cur_a, cur_b, chroma, angle = _white_balanced_lab(blur, roi_slice=wb_slice)
     glare = glare_mask(strip) > 0
     valid_px = ~glare
+    if strip.roi_mask is not None and strip.roi_mask.shape == (h, w):
+        valid_px = valid_px & (strip.roi_mask > 0)
 
     if reference is not None and reference.image.shape == strip.image.shape:
         ref_blur = cv2.GaussianBlur(reference.image, (3, 3), 0)
-        _, ref_a, ref_b, _, _ = _white_balanced_lab(ref_blur, roi_slice=band_slice)
+        _, ref_a, ref_b, _, _ = _white_balanced_lab(ref_blur, roi_slice=wb_slice)
         chroma_diff = np.hypot(cur_a - ref_a, cur_b - ref_b)
         ref_changed = _exposure_matched_change_mask(blur, ref_blur, max(16, thresholds.plate_pixel_delta // 2)) | (chroma_diff > 10.0)
         valid_px = valid_px & ref_changed
+
     # Exclude the shiny chrome barbell sleeve centerline when evaluating achromatic white tape.
     mm_per_px = 1.0 / strip.px_per_mm
     smooth_k = max(1, int(round(strip.px_per_mm * 3.0)) | 1)
     kernel = np.ones(smooth_k, dtype=np.float32) / smooth_k
     cy = h // 2
     bar_half = max(2, int(round(h * 0.08)))
-    non_bar = np.ones((y1 - y0, w), dtype=bool)
-    b0 = max(0, cy - bar_half - y0)
-    b1 = min(y1 - y0, cy + bar_half - y0)
-    if b1 > b0:
-        non_bar[b0:b1, :] = False
+    non_bar_full = np.ones((h, w), dtype=bool)
+    non_bar_full[max(0, cy - bar_half):min(h, cy + bar_half), :] = False
 
     col_scores: dict[str, np.ndarray] = {}
     masks: dict[str, np.ndarray] = {}
     for spec in specs:
         m = _match_spec(l_ch, chroma, angle, spec, valid_px, thresholds)
         masks[spec.key] = (np.clip(m, 0.0, 1.0) * 255).astype(np.uint8)
-        band_m = m[y0:y1, :]
-        if spec.is_white:
-            band_m = np.where(non_bar, band_m, 0.0)
-        raw_col = band_m.mean(axis=0)
+        eff = np.where(non_bar_full, m, 0.0) if spec.is_white else m
+        upper = eff[y_top:y_mid_lo, :].mean(axis=0)
+        lower = eff[y_mid_hi:y_bot, :].mean(axis=0)
+        raw_col = np.maximum(upper, lower)
         col_scores[spec.key] = np.convolve(raw_col, kernel, mode="same") if w >= smooth_k else raw_col
 
     min_frac = max(0.02, float(thresholds.color_min_fraction))

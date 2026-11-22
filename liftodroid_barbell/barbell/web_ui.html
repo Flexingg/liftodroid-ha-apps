@@ -400,7 +400,8 @@
             <input type="number" step="0.5" id="calWeight" placeholder="Known total (e.g. 135)" style="width:155px">
             <button class="sm primary" onclick="calibrateOnePoint()">1-pt Calibrate</button>
             <button class="sm" onclick="recordCalSample()">Record 2-pt Sample</button>
-            <button class="sm" id="solveTwoPtBtn" style="display:none" onclick="solveTwoPoint()">Solve 2-pt</button>
+            <button class="sm primary" id="solveTwoPtBtn" style="display:none" onclick="solveTwoPoint()">Solve 2-pt</button>
+            <button class="sm danger" id="clearCalBtn" style="display:none" onclick="clearCalSamples()">Clear</button>
           </div>
           <div id="calStatus" class="muted"></div>
         </div>
@@ -1201,8 +1202,11 @@ async function calibrateOnePoint() {
     const res = await api('api/calibrate_thickness', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: STATE.cfg, known_weight: kw }),
+      body: JSON.stringify({ config: STATE.cfg, known_weight: kw, grab_fresh: !!STATE.cameraConfigured }),
     });
+    if (STATE.cameraConfigured) await loadFrameImage();
+    document.getElementById('diagCard').style.display = 'block';
+    document.getElementById('diagImg').src = `api/frame?kind=diagnostic&t=${Date.now()}`;
     activeSleeve(true).sleeve_length_mm = res.sleeve_length_mm;
     syncControlsFromConfig();
     markDirty(true);
@@ -1214,6 +1218,13 @@ async function calibrateOnePoint() {
   }
 }
 
+function clearCalSamples() {
+  STATE.calSamples = [];
+  document.getElementById('solveTwoPtBtn').style.display = 'none';
+  document.getElementById('clearCalBtn').style.display = 'none';
+  document.getElementById('calStatus').textContent = 'Cleared recorded samples.';
+}
+
 async function recordCalSample() {
   const kw = parseFloat(document.getElementById('calWeight').value);
   const st = document.getElementById('calStatus');
@@ -1222,13 +1233,23 @@ async function recordCalSample() {
     const res = await api('api/calibrate_thickness', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: STATE.cfg, known_weight: kw }),
+      body: JSON.stringify({ config: STATE.cfg, known_weight: kw, grab_fresh: !!STATE.cameraConfigured }),
     });
-    STATE.calSamples.push({ weight: kw, true_mm: res.true_mm, measured_px: res.measured_px, strip_length_px: res.strip_length_px });
+    if (STATE.cameraConfigured) await loadFrameImage();
+    document.getElementById('diagCard').style.display = 'block';
+    document.getElementById('diagImg').src = `api/frame?kind=diagnostic&t=${Date.now()}`;
+    STATE.calSamples.push({
+      weight: kw,
+      true_mm: res.true_mm,
+      measured_px: res.measured_px,
+      axis_length_px: res.axis_length_px || res.strip_length_px,
+      strip_length_px: res.strip_length_px,
+    });
     if (STATE.calSamples.length > 2) STATE.calSamples.shift();
     const summary = STATE.calSamples.map((s, i) => `#${i + 1}: ${s.weight} ${STATE.cfg.unit} (${s.true_mm} mm → ${s.measured_px} px)`).join(' | ');
     st.textContent = `Recorded: ${summary}`;
     document.getElementById('solveTwoPtBtn').style.display = STATE.calSamples.length >= 2 ? 'inline-block' : 'none';
+    document.getElementById('clearCalBtn').style.display = STATE.calSamples.length >= 1 ? 'inline-block' : 'none';
   } catch (e) {
     st.textContent = `Sample error: ${e.message}`;
   }
@@ -1247,6 +1268,7 @@ async function solveTwoPoint() {
     sl.outer_face_mm = res.outer_face_mm;
     STATE.calSamples = [];
     document.getElementById('solveTwoPtBtn').style.display = 'none';
+    document.getElementById('clearCalBtn').style.display = 'none';
     syncControlsFromConfig();
     markDirty(true);
     drawCanvas();
@@ -1259,6 +1281,7 @@ async function solveTwoPoint() {
 
 async function refreshStatus() {
   const data = await api('api/state');
+  STATE.cameraConfigured = !!data.camera_configured;
   updateStatusPills(data);
   return data;
 }
@@ -1269,6 +1292,7 @@ async function init() {
     const data = await api('api/state');
     STATE.cfg = data.config;
     STATE.namedColors = data.named_colors || {};
+    STATE.cameraConfigured = !!data.camera_configured;
     updateStatusPills(data);
     syncControlsFromConfig();
     if (data.has_frame) {

@@ -235,7 +235,8 @@ class WebContext:
 
     def calibrate_thickness(self, draft: dict[str, Any] | None, known_weight: float | None = None,
                             known_thickness_mm: float | None = None,
-                            samples: list[dict[str, float]] | None = None) -> dict[str, Any]:
+                            samples: list[dict[str, float]] | None = None,
+                            grab_fresh: bool = False) -> dict[str, Any]:
         """Measure the stack in pixels on the active frame and compute calibrated sleeve_length_mm (and outer_face_mm
         when two different known weights are provided)."""
         cfg = self._merge_draft_config(draft)
@@ -247,13 +248,29 @@ class WebContext:
             s1, s2 = samples[0], samples[1]
             t1, p1 = float(s1["true_mm"]), float(s1["measured_px"])
             t2, p2 = float(s2["true_mm"]), float(s2["measured_px"])
-            strip_px = float(s2.get("strip_length_px") or s1.get("strip_length_px") or 0.0)
-            if abs(t2 - t1) < 5.0 or abs(p2 - p1) < 2.0 or strip_px <= 0:
-                raise ValueError("Two-point calibration needs two distinct non-empty weights with different thicknesses.")
+            axis_px = float(
+                s2.get("axis_length_px") or s2.get("strip_length_px")
+                or s1.get("axis_length_px") or s1.get("strip_length_px") or 0.0
+            )
+            if axis_px <= 0:
+                raise ValueError("Missing sleeve axis length in recorded samples. Record both samples again.")
+            if abs(t2 - t1) < 5.0:
+                raise ValueError(
+                    f"Both samples have nearly the same plate thickness ({t1:.0f} mm vs {t2:.0f} mm). "
+                    "Use two different weights (e.g. 135 and 225)."
+                )
+            if abs(p2 - p1) < 2.0:
+                raise ValueError(
+                    f"Both frames measured almost the same stack width ({p1:.1f} px vs {p2:.1f} px). "
+                    "Make sure plates changed between Sample 1 and Sample 2 and the green Plate mask covers the full stack."
+                )
             px_per_mm = (p2 - p1) / (t2 - t1)
             if px_per_mm <= 0:
-                raise ValueError("Heavier weight measured shorter than lighter weight; check collar -> tip direction and empty-bar reference.")
-            new_len = round(strip_px / px_per_mm, 1)
+                raise ValueError(
+                    f"Heavier weight ({t2:.0f} mm -> {p2:.1f} px) measured shorter than lighter weight "
+                    f"({t1:.0f} mm -> {p1:.1f} px). Check collar -> tip direction and that the green Plate mask covers the full stack."
+                )
+            new_len = round(axis_px / px_per_mm, 1)
             outer_face = round(max(0.0, p1 / px_per_mm - t1), 1)
             return {
                 "ok": True,
@@ -263,12 +280,21 @@ class WebContext:
                 "px_per_mm": round(px_per_mm, 3),
             }
 
+        if grab_fresh:
+            try:
+                self.grab()
+            except RuntimeError:
+                if self.last_frame is None:
+                    raise
         with self.lock:
             frame = self.last_frame
             ref = self.reference
         if frame is None:
             raise ValueError("Grab a frame with plates on the bar first.")
         res = Analyzer(cfg, None, ref).analyze(frame)
+        with self.lock:
+            self.last_analysis = res
+            self.last_analysis_cfg = cfg
         raw_prof = res.raw_profile_a
         strip = res.strip_a
         if raw_prof is None or strip is None or raw_prof.stack_length_mm <= 0:
@@ -290,13 +316,15 @@ class WebContext:
             raise ValueError("Known plate thickness must be > 0 mm.")
 
         face_mm = cfg.sleeve.outer_face_mm
-        new_len = round((known_thickness_mm + face_mm) * strip.length / measured_px, 1)
+        axis_px = strip.axis_px
+        new_len = round((known_thickness_mm + face_mm) * axis_px / measured_px, 1)
         return {
             "ok": True,
             "mode": "single_point",
             "true_mm": round(known_thickness_mm, 1),
             "measured_px": round(measured_px, 1),
-            "strip_length_px": strip.length,
+            "axis_length_px": round(axis_px, 1),
+            "strip_length_px": round(axis_px, 1),
             "sleeve_length_mm": new_len,
             "outer_face_mm": round(face_mm, 1),
             "per_side": per_side,
@@ -437,6 +465,7 @@ def make_handler(ctx: WebContext) -> type[BaseHTTPRequestHandler]:
                         known_weight=float(kw) if kw not in (None, "") else None,
                         known_thickness_mm=float(kt) if kt not in (None, "") else None,
                         samples=body.get("samples"),
+                        grab_fresh=bool(body.get("grab_fresh", False)),
                     )
                     self._send_json(HTTPStatus.OK, res)
                     return

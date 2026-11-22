@@ -12,4 +12,4 @@ Layers, each usable on its own:
   service    -> the always-on worker: RTSP, MQTT discovery, commands
 """
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"

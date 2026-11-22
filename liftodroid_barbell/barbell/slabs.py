@@ -123,6 +123,12 @@ def plate_mask(strip: Strip, reference: Strip | None, pixel_delta: int) -> np.nd
     k = max(3, int(round(strip.px_per_mm * 14)) | 1)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, k)))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+    if strip.roi_mask is not None and strip.roi_mask.shape == mask.shape and strip.collar_x_px > 0:
+        allowed = strip.roi_mask.copy()
+        c0 = max(0, int(round(strip.collar_x_px)))
+        c1 = min(mask.shape[1], int(round(strip.collar_x_px + strip.axis_px)))
+        allowed[:, c0:c1] = 255
+        mask = cv2.bitwise_and(mask, allowed)
     return mask
 
 
@@ -191,42 +197,48 @@ def profile(strip: Strip, reference: Strip | None = None, pixel_delta: int = 35,
     valid = ~bad
     glare_fraction = float(glare.mean())
 
-    # Find the contiguous plate stack starting near the collar (allowing up to ~130 mm collar / J-cup offset so
-    # slight sideways bar shifts in the rack never zero out the reading). Invalid (glared) columns bridge gaps
-    # inside the stack without extending [end] indefinitely past the last real plate.
-    gap_px = max(2, int(round(12 * strip.px_per_mm)))
-    max_start_px = min(w, max(gap_px * 4, int(round(130 * strip.px_per_mm)), int(round(w * 0.35))))
-    start = 0
-    end = 0
+    # Find contiguous plate stack segments (bridging horizontal gaps up to 24 mm from black-on-black rack posts or
+    # glare inside the stack) and pick the primary stack starting within the collar/ROI plate zone so a small stray
+    # speck near the left edge can never hijack the measurement.
+    gap_px = max(2, int(round(24 * strip.px_per_mm)))
+    max_start_px = min(w, max(gap_px * 3, int(round(strip.collar_x_px + 130 * strip.px_per_mm)), int(round(w * 0.60))))
+    segments: list[tuple[int, int, float]] = []
+    seg_start = 0
+    seg_end = 0
     gap = 0
-    started = False
+    in_seg = False
     for x in range(w):
         if heights[x] > 0:
-            if not started:
-                start = x
-                started = True
-            end = x + 1
+            if not in_seg:
+                seg_start = x
+                in_seg = True
+            seg_end = x + 1
             gap = 0
-        elif not valid[x] and started:
-            # Glare/occlusion inside the stack: pause gap counter, wait to see if plate resumes.
+        elif not valid[x] and in_seg:
             continue
-        elif started:
+        elif in_seg:
             gap += 1
             if gap > gap_px:
-                break
-        elif x > max_start_px:
-            break  # nothing near the collar: an empty sleeve
-    if started:
+                segments.append((seg_start, seg_end, float(heights[seg_start:seg_end].sum())))
+                in_seg = False
+                gap = 0
+    if in_seg:
+        segments.append((seg_start, seg_end, float(heights[seg_start:seg_end].sum())))
+
+    eligible = [s for s in segments if s[0] <= max_start_px]
+    if eligible:
+        start, end, _ = max(eligible, key=lambda s: s[2])
         heights[:start] = 0.0
         heights[end:] = 0.0
         stack_len = (end - start) * mm_per_px
         start_mm = start * mm_per_px
+        runs = _runs(heights[:end], mm_per_px)
     else:
         heights[:] = 0.0
         stack_len = 0.0
         start_mm = 0.0
+        runs = []
 
-    runs = _runs(heights[:end], mm_per_px) if started else []
     return Profile(heights, valid, mm_per_px, stack_len, tuple(runs), glare_fraction, mask, start_mm=start_mm)
 
 

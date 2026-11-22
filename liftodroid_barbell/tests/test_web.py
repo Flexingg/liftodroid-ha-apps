@@ -135,3 +135,50 @@ def test_two_point_angled_thickness_calibration(tmp_path):
     assert solved["mode"] == "two_point"
     assert abs(solved["sleeve_length_mm"] - synth.SLEEVE_MM) < 12.0
     assert abs(solved["outer_face_mm"] - true_face) < 6.0
+
+
+def test_overhead_roi_behind_collar_keeps_colors_and_grab_fresh_two_point_calibration(tmp_path):
+    """When C is placed ahead of the plates (on the visible sleeve) while the yellow ROI covers the plates behind C,
+    the strip pads backward so both rim colors and 2-point calibration (with grab_fresh) work together."""
+    plates = bumper_plates_with_tape()
+    # Place C 160 px to the right of the real plate collar, while ROI still extends back past the plates.
+    x_c = synth.COLLAR[0] + 160
+    x_t = synth.COLLAR[0] + int(synth.SLEEVE_MM * synth.PX_PER_MM)
+    y0 = synth.COLLAR[1]
+    pad = 360
+    roi = (
+        ((synth.COLLAR[0] - 20) / synth.W, (y0 - pad) / synth.H),
+        ((x_t + 20) / synth.W, (y0 - pad) / synth.H),
+        ((x_t + 20) / synth.W, (y0 + pad) / synth.H),
+        ((synth.COLLAR[0] - 20) / synth.W, (y0 + pad) / synth.H),
+    )
+    from barbell.config import Sleeve
+    sl = Sleeve(axis=((x_c / synth.W, y0 / synth.H), (x_t / synth.W, y0 / synth.H)), roi=roi, sleeve_length_mm=300.0)
+    cfg = replace(synth.config(), plates=plates, sleeve=sl, use_shape=True, use_color=True)
+    ref = tape_scene(cfg, [], outer_face_mm=40.0)
+    live = {"frame": tape_scene(cfg, [45], tape_width_mm=19.0, outer_face_mm=40.0)}
+
+    ctx = WebContext(
+        cfg=cfg,
+        cfg_path=tmp_path / "barbell.yaml",
+        opts={},
+        grab_frame=lambda: live["frame"].copy(),
+        reference=ref,
+    )
+    # 1. Analyze sees red tape even though the 45 lb plate sits completely behind C!
+    res = ctx.analyze(to_dict(cfg), grab_fresh=True)
+    assert res["color_counts"]["red"] == 1
+    assert res["measured_stack_mm"] > 50.0
+
+    # 2. 2-point calibration automatically grabs fresh frames as weights change from 135 -> 225.
+    s1 = ctx.calibrate_thickness(to_dict(cfg), known_weight=135, grab_fresh=True)
+    live["frame"] = tape_scene(cfg, [45, 45], tape_width_mm=19.0, outer_face_mm=40.0)
+    s2 = ctx.calibrate_thickness(to_dict(cfg), known_weight=225, grab_fresh=True)
+    solved = ctx.calibrate_thickness(to_dict(cfg), samples=[s1, s2])
+    assert solved["mode"] == "two_point"
+    assert abs(solved["outer_face_mm"] - 40.0) < 8.0
+    # After applying calibrated sleeve_length_mm & outer_face_mm, both thickness and color read 225 lb cleanly.
+    cal_cfg = replace(cfg, sleeve=replace(sl, sleeve_length_mm=solved["sleeve_length_mm"], outer_face_mm=solved["outer_face_mm"]))
+    res2 = ctx.analyze(to_dict(cal_cfg))
+    assert res2["reading"]["detected_weight"] == 225
+    assert res2["color_counts"]["red"] == 2

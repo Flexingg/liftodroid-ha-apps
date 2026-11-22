@@ -131,7 +131,7 @@ def diagnostic_strip(analysis: Analysis, cfg: Config) -> np.ndarray | None:
     disp_h = max(90, min(220, int(round(h * scale))))
     top = cv2.resize(base, (target_w, disp_h), interpolation=cv2.INTER_AREA)
 
-    # Ruler bar at the top (ticks every 50 mm from collar).
+    # Ruler bar at the top (ticks every 50 mm from strip start, plus green C marker if ROI extends behind collar).
     ruler_h = 26
     ruler = np.full((ruler_h, target_w, 3), 24, dtype=np.uint8)
     total_mm = w / strip.px_per_mm
@@ -143,6 +143,11 @@ def diagnostic_strip(analysis: Analysis, cfg: Config) -> np.ndarray | None:
             if mm % 50 == 0 and x < target_w - 30:
                 cv2.putText(ruler, f"{mm}", (x + 2, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220, 220, 220), 1, cv2.LINE_AA)
         mm += 25
+    if strip.collar_x_px > 2:
+        cx = int(round(strip.collar_x_px * scale))
+        if 0 <= cx < target_w:
+            cv2.line(ruler, (cx, 0), (cx, ruler_h - 1), (0, 220, 80), 2)
+            cv2.putText(ruler, "C", (min(cx + 3, target_w - 14), 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 230, 90), 1, cv2.LINE_AA)
 
     # Plate mask overlay (green tint over pixels classified as plate, cyan vertical lines at measured stack [start..end]).
     prof = analysis.raw_profile_a or analysis.profile_a

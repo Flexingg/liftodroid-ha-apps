@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.2
+
+- **Full-ROI rectified strip (no more clipped rim colors behind Collar):** `sleeve_strip()` now extends backward
+  behind the Collar (`C`) marker to cover your entire yellow ROI box and masks both plate thickness and rim colors
+  strictly to the ROI — so overhead / 3/4 views where `C` sits on the visible sleeve no longer chop off hidden
+  plates or colored rim tape behind `C`.
+- **Glare-resilient dual-half rim color sampling:** Reads the cleaner un-glared side of the plate rim when ceiling
+  lights wash out one half of the plate, and fuses tape colors together with plate thickness.
+- **Fixed 2-point thickness calibration:** **1-pt Calibrate** and **Record 2-pt Sample** now automatically grab a
+  fresh live frame, refresh the diagnostic strip immediately, scale against the collar-to-tip axis even with
+  backward ROI padding, and show exact pixel/mm diagnostics if a solve fails.
+- **Rack-post gap bridging:** Bridges up to 24 mm horizontal gaps inside a plate (e.g. a black rack upright behind
+  a black bumper plate) and selects the primary contiguous plate stack.
+
 ## 0.2.1
 
 - **Lighting-invariant tape colors:** Switched rim tape detection to per-frame auto-white-balanced CIE L\*a\*b\*
